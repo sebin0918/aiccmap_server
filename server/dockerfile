@@ -1,0 +1,44 @@
+# Node.js 및 Python 3.11.9 기반 서버 설정
+FROM node:16
+
+# Python 3.11.9 설치를 위해 기본 이미지로부터 Python 환경 설정
+RUN apt-get update && \
+    apt-get install -y python3.11 python3.11-venv python3.11-dev python3-pip && \
+    rm -rf /var/lib/apt/lists/*
+
+# Python과 Node.js 환경에서 필요한 패키지 설치
+RUN pip3 install --upgrade pip
+
+# 필요한 Python 패키지 설치
+RUN pip3 install \
+    transformers==4.34.1 \
+    git+https://github.com/haven-jeon/PyKoSpacing.git \
+    nltk==3.8.1 \
+    spacy==3.7.5 \
+    pytz \
+    konlpy==0.6.0 \
+    soynlp==0.0.493 \
+    torch==2.4.0 \
+    dateutil
+
+# Spacy 한국어 모델 설치
+RUN python3 -m spacy download ko_core_news_sm
+
+# Node.js 앱 디렉토리 생성
+WORKDIR /usr/src/app
+
+# package.json과 package-lock.json 복사
+COPY package*.json ./
+
+# Node.js 의존성 설치
+RUN npm install
+RUN npm install express-rate-limit nodemailer ioredis socket.io express-socket.io-session
+
+# 나머지 앱 파일 복사
+COPY . .
+
+# 포트 설정
+EXPOSE 5000
+
+# 서버 실행 (Python과 Node.js 서버 병렬 실행)
+CMD ["sh", "-c", "npm start & tail -f /dev/null"]
