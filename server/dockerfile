@@ -1,5 +1,5 @@
-# Node.js 및 Python 3.11.9 기반 서버 설정
-FROM node:16
+# 최신 Node.js 및 Python 3.11.9 기반 서버 설정
+FROM node:20
 
 # Python 3.11.9 설치를 위해 기본 이미지로부터 Python 환경 설정
 RUN apt-get update && \
@@ -42,4 +42,3 @@ EXPOSE 5000
 
 # 서버 실행 (Python과 Node.js 서버 병렬 실행)
 CMD ["sh", "-c", "npm start & tail -f /dev/null"]
-
