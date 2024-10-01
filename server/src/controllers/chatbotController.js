@@ -9,7 +9,7 @@ function startPythonProcess() {
   if (!pythonProcess) {
     const pythonScriptPath = path.join(__dirname, '../algorithm/script/unified_script.py');
     
-    pythonProcess = spawn('python', [pythonScriptPath]);
+    pythonProcess = spawn('python3', [pythonScriptPath]);
 
     let return_query_error = '';
 
