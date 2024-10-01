@@ -8,11 +8,8 @@ let pythonProcess = null; // 파이썬 프로세스를 글로벌 변수로 설�
 function startPythonProcess() {
   if (!pythonProcess) {
     const pythonScriptPath = path.join(__dirname, '../algorithm/script/unified_script.py');
-
-    // 가상 환경의 Python 경로로 수정
-    const pythonExecutable = '/opt/venv/bin/python3';  // 가상 환경의 Python 경로
-
-    pythonProcess = spawn(pythonExecutable, [pythonScriptPath]);
+    
+    pythonProcess = spawn('python', [pythonScriptPath]);
 
     let return_query_error = '';
 
