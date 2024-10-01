@@ -42,3 +42,4 @@ EXPOSE 5000
 
 # 서버 실행 (Python과 Node.js 서버 병렬 실행)
 CMD ["sh", "-c", "npm start & tail -f /dev/null"]
+
