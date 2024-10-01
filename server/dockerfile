@@ -25,7 +25,7 @@ RUN pip install \
     konlpy==0.6.0 \
     soynlp==0.0.493 \
     torch==2.4.0 \
-    dateutil
+    python-dateutil
 
 # Spacy 한국어 모델 설치
 RUN python3 -m spacy download ko_core_news_sm
