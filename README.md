@@ -42,7 +42,7 @@ Internet -> NAT Gateway -> Private Subnet 인스턴스
 
 ```
 
-# Client 생성 인스턴스 정보 
+# Server 생성 인스턴스 정보 
 
 | 인스턴스 | 인스턴스 유형 | Public IPv4 | Private IPv4 | 플랫폼 | 키 이름 |
 |---------|--------------|-------------|--------------|--------|--------|
