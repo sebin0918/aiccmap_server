@@ -27,7 +27,7 @@ Destination       Target
 
 ```
 
-# NET Gateway
+# NAT Gateway
 - Private subnet이 있기 때문에 구성하였습니다. 
 - Private subnet의 인스턴스를 보호합니다. 
 - Private subnet의 인스턴스가 인터넷으로 데이터 전송 시, NAT Gateway는 인스턴스의 Private IP 주소를 공인 IP 주소로 변환하여 요청을 보냅니다. 
