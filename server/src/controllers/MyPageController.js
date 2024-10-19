@@ -2,18 +2,15 @@ const pool = require('../config/database');
 const bcrypt = require('bcryptjs');
 
 // 유저 데이터 조회 함수
-const postUserData = async (req, res) => {
-  const receiveEmail = req.body.user_email;
-  console.log("Received email for user data:", receiveEmail);  // 입력 이메일 로그 확인
-  
+const getUserData = async (req, res) => {
+  const userId = req.session.userId;  // 세션에 저장된 userId 사용
+  console.log(userId);
+    
   let connection;
   try {
     connection = await pool.getConnection();
-    const query = "SELECT * FROM tb_user_key WHERE uk_email = ?";
-    const [result] = await connection.execute(query, [receiveEmail]);
-
-    console.log("User key query result (type, length):", typeof result, Array.isArray(result) ? result.length : 'not an array');  // 쿼리 결과의 타입과 길이 확인
-    console.log("User key query result (content):", result);  // 쿼리 결과의 내용 확인
+    const query = "SELECT * FROM tb_user_key WHERE user_id = ?";
+    const [result] = await connection.execute(query, [userId]);
 
     // result가 배열이 아니라 객체일 경우 바로 사용
     const userData = Array.isArray(result) ? result[0] : result;
@@ -23,12 +20,8 @@ const postUserData = async (req, res) => {
     }
 
     const user_id = userData.user_id;  // 첫 번째 결과의 user_id
-    console.log("Found user_id:", user_id);  // 사용자 ID 로그 확인
-
     const ui_query = "SELECT * FROM tb_user_information WHERE user_id = ?";
     const [ui_result] = await connection.execute(ui_query, [user_id]);
-
-    console.log("User information query result:", ui_result);  // 사용자 정보 쿼리 결과 로그 확인
 
     // 사용자 정보가 객체로 반환될 경우 바로 사용
     const userInfo = Array.isArray(ui_result) ? ui_result[0] : ui_result;
@@ -39,8 +32,7 @@ const postUserData = async (req, res) => {
 
     const uf_query = "SELECT * FROM tb_user_finance WHERE user_id = ?";
     const [uf_result] = await connection.execute(uf_query, [user_id]);
-
-    console.log("User finance query result:", uf_result);  // 사용자 금융 정보 쿼리 결과 로그 확인
+    uf_result.uf_capital = uf_result.uf_capital.toString();
 
     // 사용자 금융 정보가 객체로 반환될 경우 바로 사용
     const userFinance = Array.isArray(uf_result) ? uf_result[0] : uf_result;
@@ -60,8 +52,6 @@ const postUserData = async (req, res) => {
       holdingAsset: userFinance.uf_capital || '',
     };
 
-    console.log("Final combined result data:", data);  // 최종 응답 데이터 로그 확인
-
     res.status(200).json(data);
   } catch (err) {
     console.error('UserData 쿼리 실행 에러:', err);
@@ -76,8 +66,6 @@ const postUserData = async (req, res) => {
 const putUserChangeData = async (req, res) => {
   const receiveData = req.body;
   receiveData.gender = receiveData.gender === 'Male' ? 0 : 1;
-  console.log("변경확정Data:", receiveData);
-  console.log("세션확인확인:", req.session);
 
   let connection;
   try {
@@ -86,10 +74,9 @@ const putUserChangeData = async (req, res) => {
       receiveData.password = await bcrypt.hash(receiveData.password, 10);
     }
 
-    // receiveData.password = await bcrypt.hash(receiveData.password, 10);
     connection = await pool.getConnection();
     await connection.beginTransaction();  // 트랜잭션 시작
-
+    
     const query = "UPDATE tb_user_key SET uk_password=? WHERE uk_email = ?";
     const value = [receiveData.password, receiveData.email];
     const result = await connection.execute(query, value);
@@ -107,7 +94,6 @@ const putUserChangeData = async (req, res) => {
 
     await connection.commit();  // 모든쿼리가 성공했을때, 커밋처리
 
-    console.log('User제출 요청쿼리적용 데이터:', result, ui_result, uf_result);
     res.status(200).json({ message: '회원정보가 성공적으로 업데이트되었습니다.' });
   } catch (err) {
     if (connection) { await connection.rollback() };
@@ -120,14 +106,12 @@ const putUserChangeData = async (req, res) => {
 
 const deleteId = async (req, res) => {
   const userId = req.session.userId;  // 세션에 저장된 userId 사용
-  console.log("세션id확인:", userId);
 
     let connection;
     try {
       connection = await pool.getConnection();
       const query = "DELETE FROM tb_user_key WHERE user_id = ?";
       const result = await connection.execute(query, [userId]);
-      console.log("회원삭제 쿼리 결과:", result);
 
       // 결과 확인 후 로그아웃 처리
       if (result.affectedRows > 0) { // 탈퇴 성공 확인
@@ -138,7 +122,6 @@ const deleteId = async (req, res) => {
           }
 
           res.clearCookie('connect.sid');  // 쿠키 삭제
-          console.log('세션이 성공적으로 삭제되었습니다.');
           res.status(200).json({ message: '회원 탈퇴가 정상적으로 처리되었습니다.' });
         }); 
       } else {
@@ -157,7 +140,7 @@ const deleteId = async (req, res) => {
 
 
 module.exports = {
-  postUserData,
+  getUserData,
   putUserChangeData,
   deleteId
 };

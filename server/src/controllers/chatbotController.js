@@ -8,8 +8,7 @@ let pythonProcess = null; // 파이썬 프로세스를 글로벌 변수로 설�
 function startPythonProcess() {
   if (!pythonProcess) {
     const pythonScriptPath = path.join(__dirname, '../algorithm/script/unified_script.py');
-    
-    pythonProcess = spawn('python3', [pythonScriptPath]);
+    pythonProcess = spawn('python', [pythonScriptPath]);
 
     let return_query_error = '';
 
@@ -65,114 +64,167 @@ const postChatbotData = async (req, res) => {
   const { message } = req.body;
   const user_id = req.session.userId;
 
-  console.log('요청 수신됨: ', { message, user_id });
-
   if (!user_id) {
     console.error('에러 코드: AUTH_002 - 인증되지 않은 접근 시도');
-    return res.status(401).json({ error: '로그인 후 이용해 주세요.', code: 'AUTH_002' });
+    return res.status(401).json({ error: '사용자 인증 오류', code: 'AUTH_002' });
   }
 
   try {
-    console.log('Step 1: 기본 데이터 저장 시작');
     // 첫 번째 INSERT: 기본 데이터 저장
     await pool.query(`
       INSERT INTO tb_chat_bot (user_id, cb_text, cb_query, cb_division)
       VALUES (?, ?, ?, ?);
     `, [user_id, message, null, 1]);
-    console.log('Step 1: 기본 데이터 저장 완료');
 
-    // Python 프로세스에 message와 user_id를 JSON 형식으로 전달
-    console.log('Step 2: 첫 번째 파이썬 프로세스에 메시지 전달 시작');
-    const inputData_fir = JSON.stringify({ message, user_id });
+    if (message !== '!help') {
 
-    // JSON 데이터를 파이썬 프로세스에 전달
-    pythonProcess.stdin.write(`${inputData_fir}\n`);
-    console.log('데이터 전달 완료');
-    let return_query_data = '';
+      // Python 프로세스에 message와 user_id를 JSON 형식으로 전달
+      const inputData_fir = JSON.stringify({ message, user_id });
 
-    // Python stdout으로부터 데이터를 읽음
-    pythonProcess.stdout.once('data', async (data) => {
-      return_query_data += data.toString('utf8');
-      console.log('Python Output:', return_query_data);
-      
-      // <END>가 있는지 확인하여 끝에 도달했는지 확인
-      if (return_query_data.includes("<END>")) {
-        return_query_data = return_query_data.replace("<END>", "");  // <END> 구분자를 제거
-        console.log('Python Output (After <END> Remove):', return_query_data);
+      // JSON 데이터를 파이썬 프로세스에 전달
+      pythonProcess.stdin.write(`${inputData_fir}\n`);
+      let return_query_data = '';
+
+      // Python stdout으로부터 데이터를 읽음
+      pythonProcess.stdout.once('data', async (data) => {
+        return_query_data += data.toString('utf8');
+        if (!return_query_data) {
+          res.json({ data: '질문 의도를 파악하지 못했습니다. \n 다시 질문해주세요.' });
+          return;
+        }
         
-        try {
-          console.log('Step 3: 파이썬에서 받은 쿼리 JSON 파싱');
-          const parsedData = JSON.parse(return_query_data);  // Python에서 전달받은 데이터를 JSON으로 파싱
+        // <END>가 있는지 확인하여 끝에 도달했는지 확인
+        if (return_query_data.includes("<END>")) {
+          return_query_data = return_query_data.replace("<END>", "");  // <END> 구분자를 제거
           
-          let return_message_data = '';  // 최종 결과 저장 변수
-          let executedQueries = [];  // 실행된 쿼리 목록을 저장할 배열
+          try {
+            const parsedData = JSON.parse(return_query_data);  // Python에서 전달받은 데이터를 JSON으로 파싱
+            
+            let return_message_data = '';  // 최종 결과 저장 변수
+            let executedQueries = [];  // 실행된 쿼리 목록을 저장할 배열
+            let queryResult = null;
 
-          // 파싱된 데이터를 key와 query로 분리하여 처리
-          for (const [key, query] of Object.entries(parsedData)) {
-            console.log(`Key: ${key}`);
-            console.log(`Query: ${query}`);
-          
-            // 각 쿼리 실행
-            const queryResult = await pool.query(query);
-            executedQueries.push(query);  // 실행된 쿼리를 기록
-            console.log('Query Result:', queryResult);
+            // 파싱된 데이터를 key와 query로 분리하여 처리 // [변경사항]예외처리
+            for (const [key, query] of Object.entries(parsedData)) {
+              
+              if (key.includes("예외") || key.includes("링크") || key.toUpperCase().includes("FAQ") || key.toUpperCase().includes("증시")) {
+                queryResult = query;
+                executedQueries.push(query);  // 실행된 쿼리를 기록
+              } else {
+                // 각 쿼리 실행
+                queryResult = await pool.query(query);
+                executedQueries.push(query);  // 실행된 쿼리를 기록
+              }
 
-            // Python에 전달할 데이터를 JSON으로 구성
-            const inputData_sec = JSON.stringify({ key, queryResult });
-            console.log('Python에 전달할 데이터:', inputData_sec);
+              if (!queryResult) {
+                res.json({ data: '질문 의도를 파악하지 못했습니다. \n다시 질문해주세요.' })
+              }
 
-            // Python 프로세스에 쿼리 결과 전달
-            pythonProcess.stdin.write(`${inputData_sec}\n`);
+              // Python에 전달할 데이터를 JSON으로 구성
+              const inputData_sec = JSON.stringify({ key, queryResult });
 
-            // 파이썬에서 최종 메시지를 수신
-            const finalMessage = await new Promise((resolve) => {
-              pythonProcess.stdout.once('data', (data) => {
-                resolve(data.toString('utf8'));
+              // Python 프로세스에 쿼리 결과 전달
+              pythonProcess.stdin.write(`${inputData_sec}\n`);
+
+              // 파이썬에서 최종 메시지를 수신
+              const finalMessage = await new Promise((resolve) => {
+                pythonProcess.stdout.once('data', (data) => {
+                  resolve(data.toString('utf8'));
+                });
               });
-            });
 
-            // 각 결과를 누적하여 최종 메시지로 연결
-            return_message_data += finalMessage.trim() + '\n\n';
+              // 각 결과를 누적하여 최종 메시지로 연결
+              return_message_data += finalMessage.trim() + '\n\n';
+            }
+
+            // 마지막에 누적된 메시지와 실행된 쿼리들을 DB에 저장
+            try {
+              await pool.query(`
+                INSERT INTO tb_chat_bot (user_id, cb_text, cb_query, cb_division)
+                VALUES (?, ?, ?, ?);
+              `, [user_id, JSON.parse(return_message_data.trim()), JSON.stringify(executedQueries), 0]);
+              } catch (error) {
+                await pool.query(`
+                  INSERT INTO tb_chat_bot (user_id, cb_text, cb_query, cb_division)
+                  VALUES (?, ?, ?, ?);
+                `, [user_id, return_message_data.trim(), JSON.stringify(executedQueries), 0]);
+              }
+            // 모든 쿼리 실행 후 최종 결과 반환
+            const newChatIdResult = await pool.query(`
+              SELECT cb_id
+              FROM tb_chat_bot
+              WHERE user_id = ?
+              ORDER BY cb_id DESC
+              LIMIT 1;
+            `, [user_id]);
+
+            const newChatId = newChatIdResult[0].cb_id;
+
+            // 최종 결과를 클라이언트에 전달
+            if (return_message_data.includes("\\u")) {
+              return_message_data = JSON.parse(return_message_data.trim());
+            }
+            res.json({ data: return_message_data.trim(), newChatId });
+
+            // --- 모든 변수 초기화 ---
+            return_message_data = '';
+            executedQueries = [];
+            queryResult = null;
+            return_query_data = '';
+
+          } catch (error) {
+            console.error('에러 코드: PROC_001 - 챗봇 데이터 처리 중 에러:', error);
+            res.status(500).json({ error: '서버 내부 오류', code: 'PROC_001' });
           }
-
-          // 마지막에 누적된 메시지와 실행된 쿼리들을 DB에 저장
+        } else {
+          console.error('에러 코드: PROC_002 - 챗봇 데이터 처리 중 에러:', return_query_data);
+          res.status(500).json({ error: '서버 내부 오류', code: 'PROC_002' });
+        }
+      });
+    } else {
+      return_message_data = '안녕하세요. <br /><br />MAP beta ver 0.1 챗봇 서비스는 <br /><br />현재 재무현황과 주가 관련 정보만을 제공하고 있으며, <br /><br />한 문장에 한 가지 질문에 대해서만 답변이 가능합니다. <br /><br />이부분 유의하여 이용 부탁드립니다. <br /><br />감사합니다. ( _ _ )';
+      executedQueries = '';
+      try {
+        await pool.query(`
+          INSERT INTO tb_chat_bot (user_id, cb_text, cb_query, cb_division)
+          VALUES (?, ?, ?, ?);
+        `, [user_id, JSON.parse(return_message_data.trim()), JSON.stringify(executedQueries), 0]);
+        } catch (error) {
           await pool.query(`
             INSERT INTO tb_chat_bot (user_id, cb_text, cb_query, cb_division)
             VALUES (?, ?, ?, ?);
           `, [user_id, return_message_data.trim(), JSON.stringify(executedQueries), 0]);
-
-          // 모든 쿼리 실행 후 최종 결과 반환
-          const newChatIdResult = await pool.query(`
-            SELECT cb_id
-            FROM tb_chat_bot
-            WHERE user_id = ?
-            ORDER BY cb_id DESC
-            LIMIT 1;
-          `, [user_id]);
-
-          const newChatId = newChatIdResult[0].cb_id;
-
-          // 최종 결과를 클라이언트에 전달
-          res.json({ data: return_message_data.trim(), newChatId });
-
-        } catch (error) {
-          console.error('에러 코드: PROC_001 - 챗봇 데이터 처리 중 에러:', error);
-          res.status(500).json({ error: '서버 내부 오류', code: 'PROC_001' });
         }
-      }
-    });
 
+      const newChatIdResult = await pool.query(`
+        SELECT cb_id
+        FROM tb_chat_bot
+        WHERE user_id = ?
+        ORDER BY cb_id DESC
+        LIMIT 1;
+      `, [user_id]);
+
+      const newChatId = newChatIdResult[0].cb_id;
+
+      // 최종 결과를 클라이언트에 전달
+      if (return_message_data.includes("\\u")) {
+        return_message_data = JSON.parse(return_message_data.trim());
+      }
+      res.json({ data: return_message_data.trim(), newChatId });
+
+      // --- 모든 변수 초기화 ---
+      return_message_data = '';
+      executedQueries = [];
+      queryResult = null;
+      return_query_data = '';
+
+
+    }
   } catch (error) {
-    console.error('에러 코드: DB_003 - 챗봧 데이터 처리 중 데이터베이스 에러:', error);
+    console.error('에러 코드: DB_003 - 챗봇 데이터 처리 중 데이터베이스 에러:', error);
     res.status(500).json({ error: '서버 내부 오류', code: 'DB_003' });
   }
 };
-
-
-
-
-
-
 
 // GET Chat Detail 함수
 const getChatDetail = async (req, res) => {

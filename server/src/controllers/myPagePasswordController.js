@@ -3,9 +3,7 @@ const bcrypt = require('bcryptjs');
 
 const postCheckPassword = async (req, res) => {
   const receivePassword = req.body.userpassword;
-  console.log("비밀번호확인:", receivePassword);
   const sessionId = req.session.userId;
-  console.log("전달세션확인:", sessionId);
 
   let connection;
   try {
@@ -14,10 +12,6 @@ const postCheckPassword = async (req, res) => {
     // SQL 쿼리 실행 시 세션 ID 값을 전달
     const query = "SELECT * FROM tb_user_key WHERE user_id = ?";
     const [result] = await connection.execute(query, [sessionId]);  // 세션 ID를 사용하여 조건 값 전달
-    console.log('Password쿼리적용 데이터:', result);
-
-    // result가 배열인지 객체인지 확인 로그 추가
-    console.log("Password쿼리 결과 타입:", Array.isArray(result) ? "Array" : typeof result);
 
     // 결과가 배열인 경우만 length 확인
     if (Array.isArray(result) && result.length === 0) {

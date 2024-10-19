@@ -16,6 +16,9 @@ const {
     updateUserLoan,
     saveInvestments,
     getUserInvestments,
+    getMonthlyFixedDeposit,
+    getMonthlyFixedInstallmentSaving,
+    getTotalLoanRepayment
 } = require('../controllers/myAssetPlanerController');
 
 // 미들웨어 불러오기 
@@ -39,6 +42,8 @@ router.get('/monthly-expenditures', sessionChecker, getUserMonthlyExpenditures);
 router.get('/current-month-received', sessionChecker, getUserCurrentMonthReceived);
 router.post('/save-investments', sessionChecker, saveInvestments);
 router.get('/get-investments', sessionChecker, getUserInvestments);
-
+router.get('/monthly-fixed-deposit', sessionChecker, getMonthlyFixedDeposit);
+router.get('/monthly-fixed-installment-saving', sessionChecker, getMonthlyFixedInstallmentSaving);
+router.get('/total-loan-repayment', sessionChecker, getTotalLoanRepayment);
 
 module.exports = router;

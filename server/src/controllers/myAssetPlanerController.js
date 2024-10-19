@@ -1,6 +1,5 @@
 const pool = require('../config/database');
 
-
 // 계좌 번호 확인 API
 const checkUserBankAccount = async (req, res) => {
   try {
@@ -100,7 +99,6 @@ const getUserTargetBudget = async (req, res) => {
       WHERE user_id = ?
       LIMIT 1
     `, [userId]);
-    console.log(result); // 쿼리 결과를 출력해 확인
     if (result.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -149,7 +147,7 @@ const getUserDeposit = async (req, res) => {
       WHERE user_id = ?
       LIMIT 1
       `, [userId]);
-    console.log(result); // 쿼리 결과를 출력해 확인
+
     if (result.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -171,7 +169,7 @@ const getUserInstallmentSaving = async (req, res) => {
       WHERE user_id = ?
       LIMIT 1
       `, [userId]);
-    console.log(result); // 쿼리 결과를 출력해 확인
+    // console.log(result); // 쿼리 결과를 출력해 확인
     if (result.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -237,7 +235,7 @@ const getUserLoan = async (req, res) => {
       WHERE user_id = ?
       LIMIT 1
       `, [userId]);
-    console.log(result); // 쿼리 결과를 출력해 확인
+
     if (result.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -275,6 +273,76 @@ const updateUserLoan = async (req, res) => {
     res.json({ message: 'Loan updated successfully' });
   } catch (error) {
     console.error('Error updating loan:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 정기 예금 월 고정 지출 불러오기
+const getMonthlyFixedDeposit = async (req, res) => {
+  try {
+    const userId = req.user.id; // 로그인한 사용자 id 가져오기
+    const result = await pool.query(`
+      SELECT rp_amount
+      FROM tb_received_paid
+      WHERE user_id = ? AND rp_detail LIKE '%정기 예금%'
+      ORDER BY rp_date DESC
+      LIMIT 1
+    `, [userId]);
+    
+    if (result.length === 0) {
+      return res.status(404).json({ error: '월 고정 정기예금값을 못찾음' });
+    }
+
+    const monthlyFixedDeposit = result[0].rp_amount || 0;
+    res.json({ monthlyFixedDeposit });
+  } catch (error) {
+    console.error('Error fetching monthly fixed deposit:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 적금 월 고정 지출 불러오기
+const getMonthlyFixedInstallmentSaving = async (req, res) => {
+  try {
+    const userId = req.user.id; // 로그인한 사용자 id 가져오기
+    const result = await pool.query(`
+      SELECT rp_amount
+      FROM tb_received_paid
+      WHERE user_id = ? AND rp_detail LIKE '%적금%'
+      ORDER BY rp_date DESC
+      LIMIT 1
+    `, [userId]);
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: '월 고정 적금 지출값 못찾음' });
+    }
+
+    const monthlyFixedInstallmentSavings = result[0].rp_amount || 0;
+    res.json({ monthlyFixedInstallmentSavings });
+  } catch (error) {
+    console.error('Error fetching monthly fixed installment savings:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// 대출 상환 총 금액 불러오기
+const getTotalLoanRepayment = async (req, res) => {
+  try {
+    const userId = req.user.id; // 로그인한 사용자 id 가져오기
+    const result = await pool.query(`
+      SELECT SUM(rp_amount) AS totalLoanRepayment
+      FROM tb_received_paid
+      WHERE user_id = ? AND rp_detail LIKE '%대출 상환%'
+    `, [userId]);
+
+    if (!result[0].totalLoanRepayment) {
+      return res.status(404).json({ error: '대출 상환 내역을 찾을 수 없습니다.' });
+    }
+
+    const totalLoanRepayment = result[0].totalLoanRepayment || 0;
+    res.json({ totalLoanRepayment });
+  } catch (error) {
+    console.error('Error fetching total loan repayment:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -472,8 +540,6 @@ const getUserTotalAsset = async (req, res) => {
     `, [userId]);
     const userCapital = capitalResult.length > 0 && capitalResult[0].uf_capital !== null ? parseFloat(capitalResult[0].uf_capital) : 0;
 
-    console.log("자산가져오는지 확인", capitalResult, userCapital);
-
     // 2. 정기 예금 조회
     const depositResult = await pool.query(`
       SELECT uf_deposit FROM tb_user_finance WHERE user_id = ? LIMIT 1
@@ -504,8 +570,6 @@ const getUserTotalAsset = async (req, res) => {
     `, [userId]);
     const totalPaid = totalPaidResult.length > 0 && totalPaidResult[0].total_paid !== null ? parseFloat(totalPaidResult[0].total_paid) : 0;
 
-    console.log("입금, 출금 가져오는지 확인", totalReceivedResult, totalPaidResult, totalReceived, totalPaid);
-
     // 7. 주식 및 코인 현재 자산 계산
     // 7.1. 유저의 모든 삼성, 애플 주식 및 비트코인 수량을 합산
     const sharesResult = await pool.query(`
@@ -513,8 +577,6 @@ const getUserTotalAsset = async (req, res) => {
       FROM tb_shares_held sh 
       WHERE sh.user_id = ?
     `, [userId]);
-
-    console.log("오류 넘어왔나?", sharesResult);
 
     // 주식 수량 합산
     let totalSamsungCount = 0;
@@ -557,8 +619,6 @@ const getUserTotalAsset = async (req, res) => {
     if (latestExchangeRateResult.length === 0) {
       return res.status(404).json({ error: 'No exchange rate data found' });
     }
-    
-    console.log("여기까지 오는지 확인", latestExchangeRateResult);
 
     const latestExchangeRate = latestExchangeRateResult[0].mei_ex_rate;
 
@@ -572,12 +632,6 @@ const getUserTotalAsset = async (req, res) => {
 
     // 8. 총 자산 계산
     const totalAsset = userCapital + userDeposit + userInstallmentSaving - userLoan + totalReceived - totalPaid + totalStockAsset;
-
-    console.log('Debug: Calculated Values:', {
-      userCapital, userDeposit, userInstallmentSaving, userLoan, totalReceived, totalPaid, totalStockAsset, totalAsset
-    }); // 디버그용 콘솔 로그 추가
-
-    
 
     // 9. 결과 JSON으로 반환
     res.json({
@@ -616,11 +670,6 @@ const getUserMonthlyExpenditures = async (req, res) => {
     const startOfLastMonth = new Date(lastMonthYear, lastMonth - 1, 1).toISOString().split('T')[0];
     const endOfLastMonth = new Date(lastMonthYear, lastMonth, 0).toISOString().split('T')[0];
 
-    console.log('Start of Current Month:', startOfCurrentMonth);  // 추가된 로그
-    console.log('End of Current Month:', endOfCurrentMonth);      // 추가된 로그
-    console.log('Start of Last Month:', startOfLastMonth);        // 추가된 로그
-    console.log('End of Last Month:', endOfLastMonth);            // 추가된 로그
-
     // 금월 지출 합계 조회
     const currentMonthExpenditureResult = await pool.query(`
       SELECT SUM(rp_amount) AS current_month_expenditure
@@ -630,9 +679,6 @@ const getUserMonthlyExpenditures = async (req, res) => {
     
     const currentMonthExpenditure = currentMonthExpenditureResult[0]?.current_month_expenditure || 0;
 
-    // **금월 지출 로그 출력**
-    console.log('Current Month Expenditure:', currentMonthExpenditure); // 추가된 로그
-
     // 전월 지출 합계 조회
     const lastMonthExpenditureResult = await pool.query(`
       SELECT SUM(rp_amount) AS last_month_expenditure
@@ -641,9 +687,6 @@ const getUserMonthlyExpenditures = async (req, res) => {
     `, [userId, startOfLastMonth, endOfLastMonth]);
 
     const lastMonthExpenditure = lastMonthExpenditureResult[0]?.last_month_expenditure || 0;
-
-    // **전월 지출 로그 출력**
-    console.log('Last Month Expenditure:', lastMonthExpenditure); // 추가된 로그
 
     // 결과 JSON으로 반환
     res.json({
@@ -671,9 +714,6 @@ const getUserCurrentMonthReceived = async (req, res) => {
     const startOfCurrentMonth = new Date(currentYear, currentMonth - 1, 1).toISOString().split('T')[0];
     const endOfCurrentMonth = new Date(currentYear, currentMonth, 0).toISOString().split('T')[0];
 
-    console.log('Start of Current Month:', startOfCurrentMonth);  // 추가된 로그
-    console.log('End of Current Month:', endOfCurrentMonth);      // 추가된 로그
-
     // 금월 입금 합계 조회
     const currentMonthReceivedResult = await pool.query(`
       SELECT SUM(rp_amount) AS current_month_received
@@ -682,10 +722,6 @@ const getUserCurrentMonthReceived = async (req, res) => {
     `, [userId, startOfCurrentMonth, endOfCurrentMonth]);
     
     const currentMonthReceived = currentMonthReceivedResult[0]?.current_month_received || 0;
-
-    // **금월 입금 로그 출력**
-    console.log('Current Month Received:', currentMonthReceived); // 추가된 로그
-
     // 결과 JSON으로 반환
     res.json({
       currentMonthReceived
@@ -697,22 +733,19 @@ const getUserCurrentMonthReceived = async (req, res) => {
   }
 };
 
-// 투자 정보 추가 또는 업데이트 API
 const saveInvestments = async (req, res) => {
   const investList = req.body; // 클라이언트에서 보낸 투자 리스트
   const userId = req.user.id; // 로그인한 사용자 ID 가져오기
 
-  console.log('Received investList:', investList); // 로그 추가
-  console.log('UserId:', userId); // 로그 추가
-
+  const connection = await pool.getConnection(); // 트랜잭션을 위한 커넥션 얻기
   try {
+    await connection.beginTransaction(); // 트랜잭션 시작
     for (const invest of investList) {
       const { date, stock, action, quantity } = invest;
-
+      
       // 수량이 숫자인지 체크
       if (isNaN(quantity) || quantity <= 0) {
-        console.log('Invalid quantity:', quantity); // 로그 추가
-        return res.status(400).json({ error: "Invalid quantity" });
+        throw new Error("Invalid quantity"); // 오류 발생 시 트랜잭션 롤백을 위해 throw 사용
       }
 
       // 기본 값 설정 (구매: 양수, 판매: 음수는 rp_amount가 아니라 수량에서만 적용됨)
@@ -734,94 +767,68 @@ const saveInvestments = async (req, res) => {
         stockPriceField = 'sc_coin'; // 비트코인 가격 필드
         isForeignCurrency = true; // 비트코인도 외화로 계산
       } else {
-        console.log('Invalid stock type:', stock); // 로그 추가
         return res.status(400).json({ error: "Invalid stock type" });
       }
 
-      // 과거 기록을 포함하여 보유 주식 총량을 계산 (현재 매도 시점 이전까지의 기록)
-      const allRecords = await pool.query(`
-        SELECT sh_date, ${stockField} FROM tb_shares_held 
-        WHERE user_id = ?
-        ORDER BY sh_date ASC
+      // 현재 사용자가 보유한 해당 주식의 총량을 확인하는 쿼리
+      const totalStockRecord = await connection.query(`
+        SELECT ${stockField} 
+        FROM tb_shares_held 
+        WHERE user_id = ? 
+        LIMIT 1
       `, [userId]);
 
-      let totalHeld = 0; // 전체 보유량을 누적
-      let previousHeld = 0; // 매도 시점 이전까지의 보유량
+      let currentStockQuantity = 0;
+      if (totalStockRecord.length > 0) {
+        currentStockQuantity = totalStockRecord[0][stockField] || 0;
 
-      for (const record of allRecords) {
-        totalHeld += record[stockField];
-
-        // 현재 날짜보다 이전인 경우의 보유량 계산
-        if (new Date(record.sh_date) < new Date(date)) {
-          previousHeld += record[stockField];
+        // 주식을 매도할 때 보유량이 0보다 작아지면 오류 처리
+        if (action === "sell" && currentStockQuantity + updatedQuantity < 0) {
+          throw new Error(`투자 종목 ${stock}의 보유량이 부족합니다.`);
         }
       }
 
-      console.log(`Total held before ${date}: ${previousHeld}`); // 로그 추가
-
-      // **판매 시 보유 주식 수량 확인 (과거 시점에서 확인)**
-      if (action === "sell" && previousHeld < Math.abs(updatedQuantity)) {
-        console.log('Insufficient stock to sell on date:', previousHeld); // 로그 추가
-        return res.status(400).json({ error: "Insufficient stock to sell" });
-      }
-
-      // 매도 시점 이후의 기록도 검토하여 잘못된 매도가 발생하지 않도록 처리
-      const futureRecords = await pool.query(`
-        SELECT sh_date, ${stockField} FROM tb_shares_held
-        WHERE user_id = ? AND sh_date > ?
-        ORDER BY sh_date ASC
+      // 동일 날짜의 기록을 확인
+      const sameDateRecord = await connection.query(`
+        SELECT sh_date, sh_ss_count, sh_ap_count, sh_bit_count 
+        FROM tb_shares_held
+        WHERE user_id = ? AND sh_date = ?
+        LIMIT 1
       `, [userId, date]);
 
-      let futureHeld = previousHeld + updatedQuantity; // 이전까지의 보유량에 현재 매도량 반영
+      if (sameDateRecord.length > 0) {
+        const record = sameDateRecord[0];
 
-      for (const futureRecord of futureRecords) {
-        futureHeld += futureRecord[stockField];
-
-        if (futureHeld < 0) {
-          console.log('Insufficient stock due to future transactions:', futureHeld); // 로그 추가
-          return res.status(400).json({ error: "Insufficient stock to sell due to future transactions" });
+        // 해당 주식 필드가 비어있다면 업데이트
+        if (record[stockField] === null || record[stockField] === 0) {
+          await connection.query(`
+            UPDATE tb_shares_held 
+            SET ${stockField} = ?
+            WHERE user_id = ? AND sh_date = ?
+          `, [updatedQuantity, userId, date]);
+        } else {
+          // 이미 해당 주식 필드에 값이 있는 경우, 새로운 기록을 삽입
+          await connection.query(`
+            INSERT INTO tb_shares_held (user_id, sh_date, ${stockField})
+            VALUES (?, ?, ?)
+          `, [userId, date, updatedQuantity]);
         }
-      }
-
-      // **같은 날짜에 동일한 주식이 있으면 수량 업데이트, 없으면 새로 삽입**
-      const sameDateRecord = allRecords.find(record => record.sh_date === date);
-
-      if (sameDateRecord) {
-        const newStockCount = sameDateRecord[stockField] + updatedQuantity;
-
-        // 수량이 음수로 내려가면 에러 반환
-        if (newStockCount < 0) {
-          console.log('Insufficient stock to sell after update'); // 로그 추가
-          return res.status(400).json({ error: "Insufficient stock to sell" });
-        }
-
-        // 주식 수량 업데이트
-        await pool.query(`
-          UPDATE tb_shares_held 
-          SET ${stockField} = ? 
-          WHERE user_id = ? AND sh_date = ?
-        `, [newStockCount, userId, date]);
-
-        console.log('Investment updated:', { date, newStockCount }); // 로그 추가
       } else {
-        // 새로운 날짜에 대한 데이터 추가
-        await pool.query(`
+        // 동일 날짜에 기록이 없으면 새로 삽입
+        await connection.query(`
           INSERT INTO tb_shares_held (user_id, sh_date, ${stockField}) 
           VALUES (?, ?, ?)
         `, [userId, date, updatedQuantity]);
-
-        console.log('Investment inserted:', { date, updatedQuantity }); // 로그 추가
       }
 
       // 해당 날짜의 주식 가격 조회
-      const stockPriceResult = await pool.query(`
+      const stockPriceResult = await connection.query(`
         SELECT ${stockPriceField} FROM tb_stock
         WHERE fd_date = ?
         LIMIT 1
       `, [date]);
 
       if (stockPriceResult.length === 0) {
-        console.log(`No stock price found for date ${date}`); // 로그 추가
         return res.status(404).json({ error: `No stock price found for date ${date}` });
       }
 
@@ -831,40 +838,36 @@ const saveInvestments = async (req, res) => {
       // 비트코인이나 애플의 경우 환율 적용
       if (isForeignCurrency) {
         // 해당 날짜의 환율 가져오기
-        const exchangeRateResult = await pool.query(`
+        const exchangeRateResult = await connection.query(`
           SELECT mei_ex_rate FROM tb_main_economic_index 
           WHERE fd_date = ?
           LIMIT 1
         `, [date]);
 
         if (exchangeRateResult.length === 0) {
-          console.log('No exchange rate found for date:', date); // 로그 추가
           return res.status(404).json({ error: 'No exchange rate found for date' });
         }
-
         const exchangeRate = exchangeRateResult[0].mei_ex_rate;
-        console.log('Exchange rate for date', date, 'is', exchangeRate); // 로그 추가
-
         // 금액 계산 (외화를 환율로 원화 변환)
         totalAmount *= exchangeRate; // 주식 가격과 수량을 곱한 후 환율 적용
       }
 
       // 거래내역에 추가 (매도, 매수에 상관없이 rp_amount는 **양수 값**)
       const transactionDetail = `${stock} ${Math.abs(updatedQuantity)}개 ${action === 'buy' ? '매수' : '매도'}`;
-      await pool.query(`
+      await connection.query(`
         INSERT INTO tb_received_paid (user_id, rp_date, rp_detail, rp_amount, rp_hold, rp_part)
         VALUES (?, ?, ?, ?, 1, ?)
       `, [userId, date, transactionDetail, totalAmount, action === 'buy' ? 1 : 0]);
-
-      console.log(`Transaction inserted: ${transactionDetail} for ${totalAmount} KRW`); // 로그 추가
     }
-
+    await connection.commit(); // 트랜잭션 성공 시 커밋
     res.status(200).json({ message: "Investments saved successfully" });
-    console.log('Investments saved successfully'); // 로그 추가
 
   } catch (error) {
-    console.error('Error saving investments:', error); // 에러 로그 추가
+    await connection.rollback(); // 오류 발생 시 롤백
+    console.error('Error saving investments:', error);
     res.status(500).json({ error: 'Failed to save investments', details: error.message });
+  } finally {
+    connection.release(); // 커넥션 해제
   }
 };
 
@@ -873,8 +876,6 @@ const saveInvestments = async (req, res) => {
 const getUserInvestments = async (req, res) => {
   try {
     const userId = req.user.id; // 로그인한 사용자 id 가져오기
-    console.log('Fetching investments for user:', userId); // 로그 추가
-
     // 사용자에 해당하는 투자 내역 조회
     const investmentsResult = await pool.query(`
       SELECT sh_date, sh_ss_count, sh_ap_count, sh_bit_count
@@ -883,21 +884,16 @@ const getUserInvestments = async (req, res) => {
       ORDER BY sh_date DESC
     `, [userId]);
 
-    console.log('Investments result:', investmentsResult); // 로그 추가
-
     if (investmentsResult.length === 0) {
       console.log('No investments found for this user'); // 로그 추가
       return res.json([]);  // 빈 배열을 반환
     }
-    console.log('여기까진 찍히니?', investmentsResult.length)
-
     // 투자 내역을 JSON 형식으로 클라이언트에 반환
     res.json(investmentsResult);
   } catch (error) {
     console.error('Error fetching investments:', error); // 에러 로그 추가
     res.status(500).json({ error: 'Internal server error' });
   }
-  console.log('여기까진 찍히니?')
 };
 
 
@@ -918,4 +914,7 @@ module.exports = {
   updateUserLoan,
   saveInvestments,
   getUserInvestments,
+  getMonthlyFixedDeposit,
+  getMonthlyFixedInstallmentSaving,
+  getTotalLoanRepayment
 };

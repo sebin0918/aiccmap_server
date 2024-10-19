@@ -1,34 +1,18 @@
 const pool = require('../config/database');
 
 const getStockPredictData = async (req, res) => {
-  console.log("주식예측데이터 요청확인");
   
   let connection;
   try {
     connection = await pool.getConnection();
     const predict_quary = "SELECT sp_date, sp_ss_predict, sp_ap_predict, sp_bit_predict FROM tb_stock_predict ORDER by sp_date asc"
     const predict_result = await connection.execute(predict_quary);
-    console.log("주식예측데이터 쿼리실행:", predict_result);
     
     const stock_quary = "SELECT fd_date, sc_ss_stock, sc_ap_stock, sc_coin FROM tb_stock ORDER by fd_date asc"
     const stock_result = await connection.execute(stock_quary);
-    console.log("주식데이터 쿼리실행:", stock_result);
 
-    console.log(predict_result);
-    // const data = {
-    //   stockDate : stock_result.map((item) => item.fd_date.toISOString().slice(0, 10)),
-    //   Samsung : stock_result.map((item) => item.sc_ss_stock),
-    //   Apple : stock_result.map((item) => item.sc_ap_stock),
-    //   Bitcoin : stock_result.map((item) => item.sc_coin),
-    //   predictDate : predict_result.map((item) => item.sp_date.toISOString().slice(0, 10)),
-    //   predictSamsung : predict_result.map((item) => item.sp_ss_predict),
-    //   predictApple : predict_result.map((item) => item.sp_ap_predict),
-    //   predictBitcoin : predict_result.map((item) => item.sp_bit_predict),
-    //   x: [...stock_result.map((item) => item.fd_date.toISOString().slice(0, 10)), ...predict_result.map((item) => item.sp_date.toISOString().slice(0, 10))],
-    // }
-    
-    const data = [];
     // stock_result 데이터를 data에 추가
+    const data = [];
     for (let i = 0; i < stock_result.length; i++) {
       const stockItem = stock_result[i];
 
@@ -69,7 +53,7 @@ const getStockPredictData = async (req, res) => {
 
       data.push(predictDataItem);
     }
-    // console.log(data);
+    
     res.status(200).json(data);
   } catch (err) {
     console.error('주식예측데이터 쿼리실행 에러:', err);

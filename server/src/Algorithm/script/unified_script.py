@@ -1,29 +1,24 @@
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from typing import List, Dict, Optional, Tuple, Set, Union
 from nltk import word_tokenize, pos_tag, ne_chunk
 from dateutil.relativedelta import relativedelta
+from typing import List, Dict, Optional, Union
 from soynlp.normalizer import repeat_normalize
-from datetime import datetime, timedelta, date
-from spacy.util import filter_spans
-from spacy.matcher import Matcher
+from datetime import datetime, timedelta
 from konlpy.tag import Okt, Kkma
 from konlpy.tag import Hannanum
 from pykospacing import Spacing
 from konlpy.tag import Komoran
 from spacy.tokens import Span
-import argparse
 import warnings
 import calendar
 import logging
 import spacy
 import torch
-import time
 import pytz
 import json
 import nltk
 import sys
 import re
-import os
 import io
 
 nltk.download('punkt', )
@@ -53,7 +48,10 @@ def log_print():
     logging.warning('경고성 메세지')
 log_print()
 
-
+# map_database 폴더 내의 stock_market.txt 파일을 읽어옴
+stock_market_file = open(r'C:\Users\dlavk\SEBIN\AICC_TEAM\aicc_contest\aicc_map\map_database\stock_market\stock_market.txt', 'r', encoding='utf-8')
+stock_market_news = stock_market_file.read()
+stock_market_file.close()
 
 
 # ================================================================================ Chatbot Entity Date Function ================================================================================
@@ -70,6 +68,7 @@ def convert_relative_years(match: str, time: bool = False) -> Optional[List[int]
     """
     today_year = datetime.now().year
 
+
     # 상대적 연도 표현을 포함한 경우 처리
     relative_years = {
         "재작년": today_year - 2,
@@ -79,21 +78,31 @@ def convert_relative_years(match: str, time: bool = False) -> Optional[List[int]
         "내휴냔": today_year + 2 if time else None
     }
 
+
     # match 안에 상대적 연도 표현이 포함되어 있을 때 해당 연도 처리
     for key, year_value in relative_years.items():
         if key in match:
             return [str(year_value)] if year_value is not None else None
 
     # '년 전', '년 후'와 절대 연도 표현을 한번에 처리
-    if year_shift := re.search(r'(\d{1,4})년(?: (전|후))?', match):
-        year, shift = int(year_shift.group(1)), year_shift.group(2)
-        calculated_year = [today_year - year if shift == '전' else (today_year + year if shift == '후' else year)]
+    year_shift = re.search(r'(\d{1,4})년\s?(전|후)?', match)
 
-        if not time and calculated_year[0] > today_year:
-            return None
-        return calculated_year
+    if year_shift:
+        year = int(year_shift.group(1))  # 숫자 추출
+        shift = year_shift.group(2)      # '전' 또는 '후' 추출
+        if shift == '전':
+            calculated_year = today_year - year
+        elif shift == '후':
+            calculated_year = today_year + year
+        else:
+            calculated_year = year  # 절대 연도일 경우 그대로 반환
+
+        if not time and calculated_year > today_year:
+            return None  # 미래 연도를 포함하지 않도록 함
+        return [calculated_year]
 
     return None
+
 
 def convert_relative_months(match: str, time: bool = False, year: Optional[int] = None) -> List[str]:
     """
@@ -112,7 +121,7 @@ def convert_relative_months(match: str, time: bool = False, year: Optional[int] 
     target_year = year if year else today.year
     specified_months = []
 
-    match_exact_month = re.search(r'(\d{1,2})월', match)
+    match_exact_month = re.search(r'(\d{1,2})월(달)?', match)
     if match_exact_month:
         exact_month = int(match_exact_month.group(1))
         future_date = datetime(target_year, exact_month, 1).date()
@@ -185,13 +194,11 @@ def convert_relative_weeks(match: str, time: bool = False, year: Optional[int] =
     today = datetime.now().date()
 
     process_year = year if year else today.year
-
-    process_month = [month] if month else (list(range(1, 13)) if year else [today.month])
-
+    process_month = [month] if month else []
     date_list = []
 
-    for month in process_month:
-        first_day_of_month = datetime(process_year, month, 1).date()
+    for current_month in process_month or [today.month]:
+        first_day_of_month = datetime(process_year, current_month, 1).date()
         last_day_of_month = (first_day_of_month + relativedelta(months=1)) - timedelta(days=1)
         start_of_week = today - timedelta(days=today.weekday())
         week_keys = ["첫째 주", "둘째 주", "셋째 주", "넷째 주", "마지막 주", "저저번 주", "지난 주", "이번 주", "다음 주", "다다음 주"]
@@ -228,10 +235,10 @@ def convert_relative_weeks(match: str, time: bool = False, year: Optional[int] =
                 elif week == "다다음 주":
                     start_date = start_of_week + timedelta(weeks=2)
                     end_date = start_date + timedelta(days=6)
+
                 current_date = start_date
 
                 while current_date <= end_date:
-
                     if time:
                         date_list.append(current_date.strftime('%Y-%m-%d'))
                     else:
@@ -262,10 +269,11 @@ def convert_relative_weeks(match: str, time: bool = False, year: Optional[int] =
         first_date = datetime.strptime(date_list[0], '%Y-%m-%d').date()
         last_date = datetime.strptime(date_list[-1], '%Y-%m-%d').date()
 
-        if (year or month) and (first_date.year != process_year or first_date.month not in process_month):
+        if (year is not None and first_date.year != year) or (month is not None and first_date.month != month):
             return None
 
     return date_list
+
 
 def convert_relative_days(match: str, time: bool = False, year: Optional[int] = None, month: Optional[int] = None, week: Optional[List[str]] = None) -> Optional[List[str]]:
     """
@@ -335,7 +343,7 @@ def convert_relative_days(match: str, time: bool = False, year: Optional[int] = 
 
     # '평일', '주말' 또는 특정 요일 처리
     days_ahead = {'월요일': 0, '화요일': 1, '수요일': 2,
-                  '목요일': 3, '금요일': 4, '토요일': 5, '일요일': 6, '평일': 7, '주말': 8}
+                    '목요일': 3, '금요일': 4, '토요일': 5, '일요일': 6, '평일': 7, '주말': 8}
 
     if any(weekday in match for weekday in days_ahead):
         def filter_dates(dates, is_weekday):
@@ -356,7 +364,7 @@ def convert_relative_days(match: str, time: bool = False, year: Optional[int] = 
                     last = datetime(processed_year, 12, 31).date()
                     return [first.strftime('%Y-%m-%d')] + [(first + timedelta(weeks=i)).strftime('%Y-%m-%d')
                                                           for i in range(1, (last - first).days // 7 + 1)
-                                                          if time or first + timedelta(weeks=i) <= today]
+                                                            if time or first + timedelta(weeks=i) <= today]
 
         # 3. 연도와 월이 모두 주어진 경우 (year와 month가 모두 있음)
         elif year and month:
@@ -386,8 +394,7 @@ def convert_relative_days(match: str, time: bool = False, year: Optional[int] = 
             for weekday in days_ahead:
                 if weekday in match:
                     weekday_index = days_ahead[weekday]
-                    matching_dates = [date.strftime('%Y-%m-%d') for date in dates
-                                      if date.weekday() == weekday_index and (time or date <= today)]
+                    matching_dates = [date.strftime('%Y-%m-%d') for date in dates if date.weekday() == weekday_index and (time or date <= today)]
                     matching_weekdays.extend(matching_dates)
             result = matching_weekdays or None
 
@@ -470,84 +477,6 @@ def convert_date_expression(text: str, time: bool=False) -> Optional[List[str]]:
 
     return None
 
-def extract_date_info(text, time=False):
-    """
-    주어진 텍스트에서 날짜 정보를 추출하여 실제 날짜로 변환합니다.
-
-    Args:
-    - text (str): 입력 텍스트
-    - time (bool): 미래 날짜를 포함할지 여부를 결정하는 플래그
-
-    Returns:
-    - list: 변환된 날짜 리스트 (문자열 형식 'YYYY-MM-DD')
-    """
-
-    # 텍스트 패턴 치환 진행
-    text = replace_with_pattern_keys(text)
-
-    # convert_date_expression으로부터 변환된 날짜가 있으면 반환
-    converted_dates = convert_date_expression(text, time=time)
-
-    # 미래 날짜 표현에 대해서만 time=False일 경우 None 반환
-    future_expressions = ['내일', '모레', '글피', '다음달', '내년', '내휴냔']
-    if not time and any(expr in text for expr in future_expressions):
-        return None
-
-    if converted_dates:
-        return converted_dates
-
-    year, month, month_result, week, result = None, None, None, None, None
-
-    # 상대적 연도, 월, 주, 요일 패턴 목록
-    year_patterns = [pattern for sublist in date_patterns['상대적 연도'].values() for pattern in sublist]
-    month_patterns = [pattern for sublist in date_patterns['상대적 월'].values() for pattern in sublist]
-    week_patterns = [pattern for sublist in date_patterns['주 관련 상대적 날짜'].values() for pattern in sublist]
-    day_patterns = [pattern for sublist in date_patterns['요일'].values() for pattern in sublist]
-
-    patterns_to_check = {
-        "year": (year_patterns + [r'\b(\d{2,4}년)\b'], convert_relative_years, {'time': time}),
-        "month": (month_patterns + [r'\b(\d{1,2}개월)\b', r'\b\d{1}분기\b'], convert_relative_months, {'time': time, 'year': year}),
-        "week": (week_patterns, convert_relative_weeks, {'time': time, 'year': year, 'month': month}),
-        "day": (day_patterns + [r'\b(\d{1,2})일\b'], convert_relative_days, {'time': time, 'year': year, 'month': month, 'week': week})
-    }
-
-    # 패턴을 순회하며 일치하는 것을 변환
-    for key, (patterns, convert_function, kwargs) in patterns_to_check.items():
-        for pattern in patterns:
-            if re.search(pattern, text):
-                if key == "year" and convert_function:
-                    year_result = convert_function(text, **kwargs)
-                    if year_result:
-                        year = int(year_result[0])
-                        patterns_to_check["month"][2]['year'] = year
-                elif key == "month" and convert_function:
-                    month_result = convert_function(text, **patterns_to_check["month"][2])
-                    if month_result:
-                        month = month_result
-                elif key == "week":
-                    # year와 month가 None일 때는 None으로 전달
-                    kwargs['year'] = year
-                    kwargs['month'] = int(month[0].split('-')[1]) if month else None
-                    week = convert_function(text, **kwargs)
-                    result = week
-                elif key == "day":
-                    kwargs['year'] = year
-                    kwargs['month'] = int(month[0].split('-')[1]) if month else None
-                    kwargs['week'] = week
-                    result = convert_function(text, **kwargs)
-                break
-
-
-    final_result = result or week or month_result or ([str(year)] if year else None)
-
-    if not (final_result and final_result[0]) or (
-        not time and (any(expr in text for expr in future_expressions))):
-        return None
-
-    date_str = final_result[0]
-    final_date = datetime.strptime(date_str, '%Y' if len(date_str) == 4 else '%Y-%m' if len(date_str) == 7 else '%Y-%m-%d').date()
-
-    return None if not time and final_date > datetime.now().date() else final_result
 
 # 각 패턴 그룹 정의
 date_patterns: Dict[str, Dict[str, List[str]]] = {
@@ -654,7 +583,7 @@ def extract_date_info(text, time=False):
     converted_dates = convert_date_expression(text, time=time)
 
     # 미래 날짜 표현에 대해서만 time=False일 경우 None 반환
-    future_expressions = ['내일', '모레', '글피', '다음달', '내년', '내휴냔']
+    future_expressions = ['내일', '모레', '글피', '다음달', '내년', '내후년']
     if not time and any(expr in text for expr in future_expressions):
         return None
 
@@ -671,7 +600,7 @@ def extract_date_info(text, time=False):
 
     patterns_to_check = {
         "year": (year_patterns + [r'\b(\d{2,4}년)\b'], convert_relative_years, {'time': time}),
-        "month": (month_patterns + [r'\b(\d{1,2}개월)\b', r'\b\d{1}분기\b'], convert_relative_months, {'time': time, 'year': year}),
+        "month": (month_patterns + [r'\b(\d{1,2})월(달|만)?\b', r'\b(\d{1,2}개월)\b', r'\b\d{1}분기\b'], convert_relative_months, {'time': time, 'year': year}),
         "week": (week_patterns, convert_relative_weeks, {'time': time, 'year': year, 'month': month}),
         "day": (day_patterns + [r'\b(\d{1,2})일\b'], convert_relative_days, {'time': time, 'year': year, 'month': month, 'week': week})
     }
@@ -901,8 +830,6 @@ def split_and_return_periods(text: str, time: bool = False) -> List[str]:
         return None
 
 
-
-
 # ================================================================================ Entity Stock Function ================================================================================
 def get_spacy_model():
     global _cached_nlp
@@ -980,51 +907,48 @@ def get_stock_column(stock, info):
 
 
 # ================================================================================ Make Query Function ================================================================================
-def process_date_format(input_date, date_type="%Y-%m-%d", date_query="AND rp_date IN ("):
+# 소비, 수입, 입출금 등을 위한 패턴
+def process_date_format(input_date=None, date_type="%Y-%m-%d"):
     """
     주어진 날짜 형식(input_date)에 맞춰 SQL 쿼리 문자열을 생성하는 함수.
     'yyyy-mm-dd', 'yyyy-mm', 'yyyy' 형식의 날짜를 처리하며, 날짜 형식에 따라 다른 쿼리 형식을 반환한다.
 
     Args:
     input_date (list): 날짜 정보가 포함된 리스트. 'yyyy-mm-dd', 'yyyy-mm', 또는 'yyyy' 형식.
-    date_type (str): 날짜의 포맷. 기본값은 None이며, input_date가 없을 경우 오늘 날짜로 설정할 때 사용됨.
-    date_query (str): 기본 SQL 쿼리 문자열. 기본값은 "AND rp_date IN (". ->
+    date_type (str): 날짜의 포맷. 기본값은 "%Y-%m-%d"이며, input_date가 없을 경우 오늘 날짜로 설정할 때 사용됨.
 
     Returns:
     str: SQL 쿼리 형식의 문자열.
     """
+    
+    # input_date가 None이거나 빈 리스트인 경우 오늘 날짜로 설정
+    if not input_date:
+        date_query = ""
+        return date_query
+        # input_date = [datetime.strftime(datetime.today(), date_type)]
+    
+    # 날짜 형식에 따른 처리
+    first_date = input_date[0]
 
-    if input_date == None or input_date == []:
-        input_date = []
-        date = datetime.strftime(datetime.today(), date_type)
-        input_date.append(date)
-    if len(input_date[0]) == 10: # 형식이 'yyyy-mm-dd'
-        date_query = date_query
-        for i in input_date:
-            date_query += f'"{i}", '
-        date_query = date_query.rstrip()
-        date_query = date_query[:-1] + ")"
+    if len(first_date) == 10:  # 형식이 'yyyy-mm-dd'
+        date_query = "AND rp_date IN ("
+        date_query += ", ".join(f'"{date}"' for date in input_date)
+        date_query += ")"
         return date_query
 
-    elif len(input_date[0]) == 7:  # 형식이 'yyyy-mm'
-        date_query = "AND "
-        for i in input_date:
-            date_query += f'rp_date LIKE "{i}%" OR '
-        date_query = date_query[:-4]
+    elif len(first_date) == 7:  # 형식이 'yyyy-mm'
+        date_query = "AND (" + " OR ".join(f'rp_date LIKE "{date}%"' for date in input_date) + ")"
         return date_query
 
-    elif len(input_date[0]) == 4:  # 형식이 'yyyy'
-        date_query = "AND "
-        for i in input_date:
-            date_query += f'rp_date LIKE "{i}%" OR '
-        date_query = date_query[:-4]
+    elif len(first_date) == 4:  # 형식이 'yyyy'
+        date_query = "AND (" + " OR ".join(f'rp_date LIKE "{date}%"' for date in input_date) + ")"
         return date_query
+
     else:
-        date = datetime.strftime(datetime.today(), date_type)
-        date_query += f'"{date}", '
-        date_query = date_query.rstrip(", ") + ")"
+        today_date = datetime.strftime(datetime.today(), date_type)
+        date_query = f'AND rp_date LIKE "{today_date}%"'
         return date_query
-
+    
 # 주식 수량을 위한 패턴
 def process_date_format_stock_qty(input_date, date_type='%Y-%m-%d'):
     if input_date == None:
@@ -1087,8 +1011,11 @@ def generate_query_expend(ent1, rp_part, add_query, date_query, query_type):
 
     return None
 
-def generate_query_입출금(detail, add_query, date_query, order_by=None, limit=None):
+def generate_query_TRANSACTION(detail, add_query, date_query, order_by=None, limit=None, frequent=False):
     base_query = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "{detail}" {add_query} {date_query}'
+    if frequent:
+        # 자주 발생한 데이터를 찾기 위한 추가 쿼리
+        base_query = f'SELECT rp_detail, COUNT(*) as freq, SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "{detail}" {add_query} {date_query} GROUP BY rp_detail HAVING COUNT(*) >= 3'
     if order_by:
         base_query += f' ORDER BY rp_amount {order_by}'
     if limit:
@@ -1096,129 +1023,202 @@ def generate_query_입출금(detail, add_query, date_query, order_by=None, limit
     return base_query
 
 def finance_pattern_query(finance_query, input_time=None, entity1=None, entity2=None, date_query=None, text=None):
+    
     query = {}
-    add_query = "AND rp_hold = 0" if text and "고정" in text else ""
+    no_space_text = text.replace(" ", "")
+    add_query = "AND rp_hold = 0" if "고정" in no_space_text else ""
     add_str = "고정" if add_query else ""
 
-    if finance_query == "지출" or finance_query == "소득" or r'구매|구입|\b산\b' in text:
+    if finance_query == "지출" or finance_query == "소득" or r'구매|구입|\b산\b' in no_space_text:
         for ent1 in entity1:
             for ent2 in entity2:
 
+                # "지출" 또는 "소득"으로 직접 설정
+                finance_type = "지출" if finance_query == "지출" else "소득"
+
                 if ent2[1] == "sum":
-                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in text else 0
-                    query[f'{add_str}{ent1[1]}_sum'] = f'SELECT SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = {rp_part} {add_query} ' + date_query
+                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in no_space_text else 0
+                    query[f'{add_str}{finance_type}_sum'] = f'SELECT SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = {rp_part} {add_query} ' + date_query
+                
                 elif ent2[1] == "average":
-                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in text else 0
-                    query[f'{add_str}{ent1[1]}_average'] = f'SELECT AVG(rp_amount) as Average_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = {rp_part} {add_query} ' + date_query
+                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in no_space_text else 0
+                    query[f'{add_str}{finance_type}_avg'] = f'SELECT AVG(rp_amount) as Average_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = {rp_part} {add_query} ' + date_query
+                
                 elif ent2[1] == "sort":
-                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in text else 0
-                    if any(word in text for word in ["큰", "크게", "높은"]):
-                        if any(word in text for word in ["가장", "최고", "제일"]):
-                            query[f'{add_str}{ent1[1]}_highest'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'highest')
-                            break
-                        query[f'{add_str}{ent1[1]}_top5'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'top5')
-
-                    elif any(word in text for word in ["작은", "적게", "낮은", "적은", "작게"]):
-                        if any(word in text for word in ["가장", "최고", "제일"]):
-                            query[f'{add_str}{ent1[1]}_lowest'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'lowest')
-                            break
-                        query[f'{add_str}{ent1[1]}_bottom5'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'bottom5')
-
-                    elif any(word in text for word in ["자주", "많이", "빈번", "반복", "주요", "많은"]):
-                        query[f'{add_str}{ent1[1]}_frequent'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'frequent')
+                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in no_space_text else 0
+                    if any(word in no_space_text for word in ["큰", "크게", "높은", "높게"]):
+                        if any(word in no_space_text for word in ["가장", "최고", "제일"]):
+                            query[f'{add_str}{finance_type}_highest'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'highest')
+                        else:
+                            query[f'{add_str}{finance_type}_top5'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'top5')
+                    
+                    elif any(word in no_space_text for word in ["작은", "적게", "낮은", "낮게", "적은", "작게"]):
+                        if any(word in no_space_text for word in ["가장", "최고", "제일"]):
+                            query[f'{add_str}{finance_type}_lowest'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'lowest')
+                        else:
+                            query[f'{add_str}{finance_type}_bottom5'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'bottom5')
+                    
+                    elif any(word in no_space_text for word in ["자주", "많이", "빈번", "반복", "주요", "많은"]):
+                        query[f'{add_str}{finance_type}_frequent'] = generate_query_expend(ent1, rp_part, add_query, date_query, 'frequent')
 
                 elif ent2[1] == "simple":  # None일 때 sum, average, sort 조건 제외한 쿼리만 추가
-                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in text else 0
-                    query[f'{add_str}{ent1[1]}_simple'] = f"SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 {add_query} {date_query}"
+                    rp_part = 1 if finance_query == "지출" or r'구매|구입|\b산\b' in no_space_text else 0
+                    query[f'{add_str}{finance_type}_simple'] = f"SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = {rp_part} {add_query} {date_query}"
+
+
+
     elif finance_query == "예산":
-        this_month = datetime.today().strftime("%Y-%m")
-        this_month = datetime.strptime(this_month, '%Y-%m')
-        date = datetime.strptime(input_time, "%Y-%m")
-        if  date < this_month:
-            query = { "예외" : '과거 예산 조회가 불가능합니다' }
-            return query
-        elif date > this_month:
-            query = { "예산추천" : 'SELECT rp_amount FROM tb_received_paid WHERE rp_date BETWEEN DATE_ADD(NOW(), INTERVAL -3 MONTH ) AND NOW() AND rp_part = 1' }
-            return query
-        elif date == this_month:
-            query = { "예산" :'SELECT uf_target_예산 FROM tb_user_finance WHERE user_id = {{user_id}}' }
-            return query
-    elif finance_query == "DEPOSIT_SAVINGS":
+        
+        current_date = datetime.today()
+        current_year = current_date.year
+        this_month = current_date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        if re.fullmatch(r'\d{4}-\d{1,2}', input_time):
+            input_date = datetime.strptime(input_time, "%Y-%m")
+
+            if input_date < this_month:
+                query["예외"] = f"과거 예산 조회는 불가능합니다.\n{this_month.strftime('%Y-%m')}만 조회가 가능합니다." 
+            elif input_date > this_month or "추천" in text:
+                query["다음달 예산추천"] = (
+                    "SELECT AVG(rp_amount) AS monthly_average FROM tb_received_paid "
+                    "WHERE user_id = {user_id} AND rp_date BETWEEN DATE_ADD(NOW(), INTERVAL -3 MONTH) AND NOW() AND rp_part = 1;"
+                )
+            else:
+                query["예산"] = (
+                    f'SELECT uf.uf_target_budget, rp.rp_amount FROM tb_user_finance uf CROSS JOIN tb_received_paid rp WHERE uf.user_id = {{user_id}} AND rp.user_id = {{user_id}} AND rp.rp_date LIKE ("{input_time}%")')
+                
+
+        elif re.fullmatch(r'\d{4}', input_time):
+            input_year = int(input_time)
+
+            if input_year < current_year:
+                query["예외"] = f"과거 예산 조회는 불가능합니다.\n{this_month.strftime('%Y-%m')}만 조회가 가능합니다." 
+            elif input_year > current_year or "추천" in text:
+                query["올해 예산추천"] = (
+                    'SELECT AVG(rp_amount) AS yearly_average FROM tb_received_paid '
+                    'WHERE rp_date BETWEEN DATE_ADD(NOW(), INTERVAL -3 YEAR) AND NOW() AND rp_part = 1;'
+                )
+            else:
+                query["예외"] = f"올해 예산 조회는 불가능합니다.\n{this_month.strftime('%Y-%m')}만 조회가 가능합니다." 
+
+
+
+    elif finance_query == "저축":
+
         detail_conditions = {
-            "예금": "rp_detail = '예금'",
+            "예금": "rp_detail = '정기 예금'",
             "적금": "rp_detail = '적금'",
-            "예적금": "(rp_detail = '예금' OR rp_detail = '적금')"
+            "예적금": "(rp_detail = '정기 예금' OR rp_detail = '적금')",
+            "저축": "(rp_detail = '정기 예금' OR rp_detail = '적금')",
+            "저금": "(rp_detail = '정기 예금' OR rp_detail = '적금')",
         }
         for i in range(len(entity1)):
             detail_query = detail_conditions.get(entity1[i][0], "")
 
             if entity2[0][1] == "stats":
-                query[f'{entity1[i][0]}'] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 AND {detail_query} {date_query}'
-                query[f'{entity2[i][0]}'] = f'SELECT rp_detail, SUM(rp_amount) AS Total_Amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 AND {detail_query} {date_query}'
+                query[f'{entity1[i][0]}_stats'] = f'SELECT rp_date, rp_detail, rp_amount, SUM(rp_amount) OVER () AS Total_Amount FROM tb_received_paid WHERE user_id = 10 AND rp_part = 1 AND {detail_query} {date_query} ORDER BY rp_date ASC'
+                
             elif entity2[0][1] in ["sum", "date"]:
                 sum_or_date = "SUM(rp_amount) AS Total_Amount" if entity2[0][1] == "sum" else "rp_date, rp_amount"
-                query[f'{entity2[i][0]}'] = f'SELECT rp_detail, {sum_or_date} FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 AND {detail_query} {date_query}'
+                query[f'{entity1[i][0]}_sum'] = f'SELECT rp_detail, {sum_or_date} FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 AND {detail_query} {date_query}'
             else:
-                query[f'{entity1[i][0]}'] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 AND {detail_query} {date_query}'
+                query[f'{entity1[i][0]}_simple'] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_part = 1 AND {detail_query} {date_query} ORDER BY rp_date ASC'
 
         return query
+    
+
+
     elif finance_query == "입출금":
+
         def is_deposit(text, e1):
-            return "입금" in text or any(word in text for word in ["들어온", "받은"])
+            return any(word in text for word in ["입금", "들어온", "받은"]) or e1 == "입금"
 
         def is_withdrawal(text, e1):
-            return e1 in ["출금", "납부", "인출"] or any(word in text for word in ["나간", "보낸"])
+            return any(word in text for word in ["출금", "납부", "인출", "나간", "보낸"]) or e1 in ["출금", "납부", "인출"]
 
         for i in range(len(entity1)):
+            
             e1 = entity1[i][0]
-            e2 = entity2[i][1]
-
+            e2 = entity2[i][1] if len(entity2[i]) > 1 else None
+            
             if e2 == "sum":
                 if is_deposit(text, e1):
-                    query[e1] = f'SELECT SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "입금" {add_query} {date_query}'
+                    query[f"{add_str}입금_sum"] = f'SELECT SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "입금" {add_query} {date_query}'
                 elif is_withdrawal(text, e1):
-                    query[e1] = f'SELECT SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "출금" {add_query} {date_query}'
-
+                    query[f"{add_str}출금_sum"] = f'SELECT SUM(rp_amount) as Total_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "출금" {add_query} {date_query}'
+            
             elif e2 == "sort":
                 if any(word in text for word in ["큰", "크게", "높은"]):
                     sort_order = "DESC"
+                    size_suffix = "_highest" if any(word in text for word in ["가장", "최고", "제일"]) else "_top5"
                 elif any(word in text for word in ["작은", "적게", "낮은", "적은", "작게"]):
                     sort_order = "ASC"
+                    size_suffix = "_lowest" if any(word in text for word in ["가장", "최고", "제일"]) else "_bottom5"
                 else:
                     sort_order = None
+                    size_suffix = ""
 
+                # limit 설정
                 limit = "1" if any(word in text for word in ["가장", "최고", "제일"]) else "5"
-
-                if is_deposit(text, e1):
-                    query[e1] = generate_query_입출금("입금", add_query=add_query, date_query=date_query, order_by=sort_order, limit=limit)
-                elif is_withdrawal(text, e1):
-                    query[e1] = generate_query_입출금("출금", add_query=add_query, date_query=date_query, order_by=sort_order, limit=limit)
-
+                
+                # 자주 발생한 경우를 처리
+                if any(word in text for word in ["자주", "많이", "빈번", "반복", "주요", "많은"]):
+                    size_suffix = "_frequent"
+                    # 입금/출금 여부에 따라 쿼리 생성
+                    if is_deposit(text, e1):
+                        query[f"{add_str}입금{size_suffix}"] = generate_query_TRANSACTION(
+                            "입금", add_query=add_query, date_query=date_query, frequent=True
+                        )
+                    elif is_withdrawal(text, e1):
+                        query[f"{add_str}출금{size_suffix}"] = generate_query_TRANSACTION(
+                            "출금", add_query=add_query, date_query=date_query, frequent=True
+                        )
+                else:
+                    # 입금/출금 여부에 따라 쿼리 생성 및 키 값 설정
+                    if is_deposit(text, e1):
+                        query[f"{add_str}입금{size_suffix}"] = generate_query_TRANSACTION(
+                            "입금", add_query=add_query, date_query=date_query, order_by=sort_order, limit=limit
+                        )
+                    elif is_withdrawal(text, e1):
+                        query[f"{add_str}출금{size_suffix}"] = generate_query_TRANSACTION(
+                            "출금", add_query=add_query, date_query=date_query, order_by=sort_order, limit=limit
+                        )
             elif e2 == "average":
-                if is_deposit(text, e1):
-                    query[e1] = f'SELECT AVG(rp_amount) as Average_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "입금" {add_query} {date_query}'
-                elif is_withdrawal(text, e1):
-                    query[e1] = f'SELECT AVG(rp_amount) as Average_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "출금" {add_query} {date_query}'
+                if is_deposit(text, e2):
+                    query[f"{add_str}입금_avg"] = f'SELECT AVG(rp_amount) as Average_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "입금" {add_query} {date_query}'
+                elif is_withdrawal(text, e2):
+                    query[f"{add_str}출금_avg"] = f'SELECT AVG(rp_amount) as Average_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "출금" {add_query} {date_query}'
 
             else:
                 if is_deposit(text, e1):
-                    query[e1] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "입금" {add_query} {date_query}'
+                    query[f"{add_str}입금_simple"] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "입금" {add_query} {date_query}'
                 elif is_withdrawal(text, e1):
-                    query[e1] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "출금" {add_query} {date_query}'
-    elif finance_query == "ASSET":
-        query["링크"] = "MAP_LINK"
-    elif finance_query == "LOAN":
+                    query[f"{add_str}출금_simple"] = f'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} AND rp_detail = "출금" {add_query} {date_query}'
+
+
+
+    elif finance_query == "자산":
+        query["링크"] = "https://localhost:3000/myassetplaner"
+
+
+
+    elif finance_query == "대출":
         for _ in range(len(entity1)):
-            if "대출상환" in text:
-                query['대출상환'] = 'SELECT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {{user_id}} rp_detail = "대출 상환"' + " " + date_query
+            if "상환" in text:
+                # query['대출'] = 'SELECT uf_loan FROM tb_user_finance WHERE user_id = {user_id}'
+                query['대출상환'] = f'SELECT uf.user_id, uf.uf_loan, rp.rp_date, rp.rp_detail, rp.rp_amount, ra.rp_all AS rp_all FROM tb_user_finance uf JOIN tb_received_paid rp ON uf.user_id = rp.user_id JOIN (SELECT sum(rp_amount) AS rp_all FROM tb_received_paid WHERE rp_detail="대출 상환"AND user_id={user_id}) AS ra ON uf.user_id = rp.user_id WHERE rp.rp_detail = "대출 상환" AND uf.user_id={user_id}' + " " + date_query
+                # query['갚은대출'] = f'SELECT SUM(rp_amount) as sum_loan_amount FROM tb_received_paid WHERE user_id = {user_id} AND rp_detail = "대출 상환"'
                 text = text.replace("상환", "", 1)
             elif "대출":
                 query['대출'] = 'SELECT uf_loan FROM tb_user_finance WHERE user_id = {user_id}'
-            else:
-                pass
+    
+
+
     elif finance_query == "가계부":
         query[f'전체내역'] = 'SELELT rp_date, rp_detail, rp_amount FROM tb_received_paid WHERE user_id = {user_id}' + " " + date_query
     return query
+
+
 
 def pattern_stock(entity, input_date, text=None):  # [('삼성', 'STOCK'), ('애플', 'STOCK'), ('산', 'buy')]
     query, entity_list, entity_str = {}, [], ''
@@ -1276,6 +1276,7 @@ def pattern_stock(entity, input_date, text=None):  # [('삼성', 'STOCK'), ('애
                 query[f'{entity_list[i]}주식내역'] = f'SELECT SUM({entity_list[i]}) as total_{entity_list[i]} FROM tb_shares_held WHERE user_id = {{user_id}} {date_query}'
         return query
 
+
 # 앤티티 2개일때, 1개만 남기기
 def filter_entities(entities):
     entity_map = {
@@ -1309,27 +1310,25 @@ def filter_entities(entities):
             vs2[list(i.keys())[0]] = list(i.values())[0]
     return list(vs2.keys())
 
+
 def process_fixed_dates_original(input_date, text):
+
+    if isinstance(input_date, str):
+        input_date = [input_date]
     input_dates = []
 
     # "고정"이 text에 포함된 경우 처리
-    if "고정" in text:
+    if input_date == None:
+        date_query = ""
+
+    elif "고정" in text or "고 정" in text:
         for x in range(len(input_date)):
             today_str = datetime.now(kst).strftime("%Y-%m-%d" if len(input_date[x]) == 10 else "%Y-%m" if len(input_date[x]) == 7 else "%Y")
             today = datetime.strptime(today_str, "%Y-%m-%d" if len(today_str) == 10 else "%Y-%m" if len(input_date[x]) == 7 else "%Y")
             input_date_compare = datetime.strptime(input_date[x], "%Y-%m-%d" if len(input_date[x]) == 10 else "%Y-%m" if len(input_date[x]) == 7 else "%Y")
-
-            # input_date가 현재 날짜보다 미래인 경우
-            if input_date_compare > today:
-                for day in input_date:
-                    day_str = str(day)
-                    day = datetime.strptime(day, {10: "%Y-%m-%d", 7: "%Y-%m", 4: "%Y"}[len(day_str)])
-                    day -= relativedelta(months=2)
-                    day = day.strftime({10: "%Y-%m-%d", 7: "%Y-%m", 4: "%Y"}[len(day_str)])
-                    input_dates.append(day)
-
+            
             # input_date가 현재 날짜와 동일한 경우
-            elif input_date_compare == today:
+            if input_date_compare == today or  input_date_compare > today:
                 today = datetime.now(kst)
                 one_year_ago  = today - relativedelta(years=1)
                 one_month_ago = today - relativedelta(months=1)
@@ -1357,12 +1356,12 @@ def process_fixed_dates_original(input_date, text):
             elif input_date_compare < today:
                 input_dates.append(input_date[x])
 
-
-    date_query = process_date_format(input_dates) if input_date else None
+    date_query = process_date_format(input_dates) if input_date else ""
     return date_query
 
+
 # 쿼리 추출 함수
-def finance_create_quary(text):
+def finance_create_query(text):
 
     entity = extract_finance_entities(text)
     entity1 = (entity['pattern1'])
@@ -1371,15 +1370,19 @@ def finance_create_quary(text):
     original_input_date  = split_and_return_periods(text, False)
     input_date = original_input_date
 
-    if not input_date:
-        input_date = datetime.now(kst).strftime("%Y-%m")
-
-    date_query_fixed = process_fixed_dates_original(input_date, text)
-
     entity1pattern = []
     for i in range(len(entity1)):
         entity1pattern.append(entity1[i][1])
     entity1pattern = list(set(entity1pattern))
+
+    if "대출" in entity1pattern or "저축" in entity1pattern:
+        if not input_date:
+            input_date = None
+    else:
+        if not input_date:
+            input_date = [datetime.now(kst).strftime("%Y-%m")]
+
+    date_query_fixed = process_fixed_dates_original(input_date, text)
 
     if "주식" in entity1pattern or r"매입|매수|투자|판매|매매|매도|\b판\b|처분" in text:
         return pattern_stock(entity1, input_date, text=text)
@@ -1391,12 +1394,17 @@ def finance_create_quary(text):
             entity1pattern = entity1pattern[0]
 
         if entity1pattern == "지출" or entity1pattern == "소득" or r'구매|구입|\b산\b' in text:
-            if "고정" in text:
+            if "고정" in text or "고 정" in text:
                 return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, text=text, date_query=date_query_fixed)
-            date_query = process_date_format(input_date)
+            if not input_date:
+                input_date = datetime.strftime(datetime.today(), '%Y-%m-%d')
+                date_query = process_date_format(input_date)
+            else:
+                date_query = process_date_format(input_date)
             return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, date_query=date_query, text=text)
 
         elif entity1pattern == "예산":
+            input_date = split_and_return_periods(text, True)
             if input_date == None or len(input_date) == 7:
                 input_date = [datetime.strftime(datetime.today(), '%Y-%m')]
             input_month = input_date[0]
@@ -1407,6 +1415,8 @@ def finance_create_quary(text):
             return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, text=text, date_query=date_query)
 
         elif entity1pattern == "저축":
+            if "고정" in text or "고 정" in text:
+                return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, text=text, date_query=date_query_fixed)
             date_query = process_date_format(input_date, date_type="%Y-%m-%d")
             return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, date_query=date_query, text=text)
 
@@ -1416,22 +1426,22 @@ def finance_create_quary(text):
                 return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, text=text, date_query=date_query_fixed)
             else:
                 return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, entity2=entity2, text=text, date_query=date_query)
-        elif entity1pattern == "ASSET":
-            return finance_pattern_query(finance_query=entity1pattern)
+        elif entity1pattern == "자산":
+            return finance_pattern_query(finance_query=entity1pattern, text=text)
 
         elif entity1pattern == "가계부":
             date_query = process_date_format(input_date, date_type='%Y-%m')
             return finance_pattern_query(finance_query=entity1pattern, entity1=entity1, date_query=date_query, text=text)
 
         elif len(entity1pattern) == 0:
-            query = { "예외": "질문에서 사용자의 의도파악에 실패하였습니다. 형식에 맞춰 다시 질문해주세요." }
+            query = { "예외": "질문에서 사용자의 의도파악에 실패하였습니다." }
             return query
         else:
-            query = { "예외": "죄송합니다. 2개 이상의 재무정보는 한번에 답변이 불가능합니다. 1종류의 재무정보만 질문해주세요." }
+            query = { "예외": "죄송합니다. 2개 이상의 재무정보는 한번에 답변이 불가능합니다." }
             return query
 
 def finance_clean_query(text):
-    query = finance_create_quary(text)
+    query = finance_create_query(text)
     complite_query = {}
     temp_value = set()
     for i, j in query.items():
@@ -1445,96 +1455,176 @@ def stockpricequery(text):
     stock_labels = ["삼성전자", "애플", "비트코인"]
     requested_stocks = [stock for stock in stock_labels if stock in entities]
 
-    today      = datetime.now(kst)
-    dates      = split_and_return_periods(text, True)  # ['2024-09-25', '2024-09-26'] 혹은 None 반환 가능
-    if dates:
-        converted_dates = [
-            kst.localize(datetime.strptime(date_str, '%Y' if len(date_str) == 4 else '%Y-%m' if len(date_str) == 7 else '%Y-%m-%d'))
-            for date_str in dates if len(date_str) in [4, 7, 10]
-        ]
-        past_dates = [date for date in converted_dates if date <= today] if converted_dates else None
-    else:
-        past_dates = None
+    if not requested_stocks:
+        return {"예외": "조회할 주식 종목을 명확히 알려주세요."}
 
-    # 미래 데이터만 있을 경우 메시지 반환
-    if (past_dates is None or len(past_dates) == 0) and dates and len(dates) > 0:
-        return "주식/코인에 대한 예상값은 다음 링크를 참조하세요: {PS_LINK}"
+    # 날짜 처리
+    today = datetime.now(kst)
+    yesterday = today - timedelta(days=1)
+    dates = split_and_return_periods(text, True)  # 미래 날짜도 포함
+    if dates:
+        converted_dates = []
+        for date_str in dates:
+            try:
+                if len(date_str) == 10:
+                    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                elif len(date_str) == 7:
+                    date_obj = datetime.strptime(date_str, '%Y-%m')
+                elif len(date_str) == 4:
+                    date_obj = datetime.strptime(date_str, '%Y')
+                else:
+                    continue
+                date_obj = kst.localize(date_obj)
+                converted_dates.append(date_obj)
+            except ValueError:
+                continue
+        past_dates = [date for date in converted_dates if date <= today]
+        if not past_dates:
+            return {"예외": "미래 예측 데이터는 이곳에서 확인해 주세요.\nhttps://localhost:3000/stockprediction"}
+    else:
+        # 날짜가 없으면 오늘 날짜로 설정
+        past_dates = [yesterday]
 
     # 날짜 조건 생성
-    if not dates:
-        date_condition = f"sp_date = '{today.strftime('%Y-%m-%d')}'"
-    elif len(dates) == 1:
-        date_condition = f"sp_date = '{dates[0]}'"
-    else:
-        date_condition = f"sp_date IN ('{', '.join([date for date in dates])}')"
+    date_conditions = []
+    for date_obj in past_dates:
+        date_str = date_obj.strftime('%Y-%m-%d')
+        date_conditions.append(f"'{date_str}'")
+    date_condition = f"fd_date IN ({', '.join(date_conditions)})"  # 컬럼 이름 수정
 
+    # 종목별 컬럼 매핑
     stocks_map = {
-    "삼성전자": "sc_ss_stock",
-    "애플": "sc_ap_stock",
-    "비트코인": "sc_coin"
+        "삼성전자": "sc_ss_stock",
+        "애플": "sc_ap_stock",
+        "비트코인": "sc_coin"
     }
 
-    query = f"SELECT {stocks_map.get(requested_stocks[0], '')} FROM tb_stock WHERE {date_condition}" if requested_stocks else "해당 정보가 없습니다."
-    return query if "주가" in entities and requested_stocks else "다시 질문해주시겠습니까?"
+    # SQL 쿼리 생성
+    stock_column = stocks_map.get(requested_stocks[0])
+    if not stock_column:
+        return {"예외": "해당 주식 종목에 대한 정보가 없습니다."}
+    query = f"SELECT fd_date, {stock_column} FROM tb_stock WHERE {date_condition} ORDER BY fd_date DESC;"  # 컬럼 이름 수정
+    return {f"{requested_stocks[0]}_주가": query}
 
 def stock_information_query(text):
     entities = extract_stock_entities(text)
     stock_map = {
-        "삼성전자": {"PBR": "sc_ss_pbr", "PER": "sc_ss_per", "ROE": "sc_ss_roe", "MC": "sc_ss_mc"},
-        "애플": {"PBR": "sc_ap_pbr", "PER": "sc_ap_per", "ROE": "sc_ap_roe", "MC": "sc_ap_mc"}
+        "삼성전자": {
+            "PBR": "sc_ss_pbr",
+            "PER": "sc_ss_per",
+            "ROE": "sc_ss_roe",
+            "MC": "sc_ss_mc",
+            "StockPrice": "sc_ss_stock"  # 주가 컬럼 추가
+        },
+        "애플": {
+            "PBR": "sc_ap_pbr",
+            "PER": "sc_ap_per",
+            "ROE": "sc_ap_roe",
+            "MC": "sc_ap_mc",
+            "StockPrice": "sc_ap_stock"  # 주가 컬럼 추가
+        },
+        "비트코인": {
+            "MC": "sc_coin",
+            "StockPrice": "sc_coin"  # 주가 컬럼 추가
+        }
     }
     stock_labels = stock_map.keys()
+    info_labels = {"PBR", "PER", "ROE", "MC"}
+
+    # 사용자 입력에서 주식 종목과 금융 지표 추출
     requested_stocks = [stock for stock in stock_labels if stock in entities]
-    if not requested_stocks:
-        return "해당 정보는 존재하지 않습니다."
-    info_labels = ["PBR", "PER", "ROE", "MC"]
-
     requested_infos = [info for info in info_labels if info in entities]
-    date = split_and_return_periods(text)
 
-    date_condition = (
-    f"sp_date = '{datetime.now(kst).strftime('%Y-%m-%d')}'" if not date or date == []
-    else f"sp_date = '{date[0]}'" if len(date) == 1
-    else f"sp_date IN ('{', '.join(date)}')"
-    )
+    if not requested_stocks:
+        return {"예외": "조회할 주식 종목을 명확히 알려주세요."}
+    if not requested_infos:
+        return {"예외": "조회할 정보를 명확히 알려주세요. (PER, PBR, ROE, 시가총액 등)"}
 
-    # SQL 쿼리 생성 및 답변 생성
-    if requested_stocks and requested_infos:
-        stock_info_column = stock_map.get(requested_stocks[0], {}).get(requested_infos[0])
-        return f"SELECT {stock_info_column} FROM tb_stock WHERE {date_condition};" if stock_info_column else "해당 정보가 없습니다."
+    # 날짜 처리
+    today = datetime.now(kst)
+    yesterday = today - timedelta(days=1)
+    dates = split_and_return_periods(text, True)  # 미래 날짜 포함
+    if dates:
+        converted_dates = []
+        for date_str in dates:
+            try:
+                if len(date_str) == 10:
+                    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
+                elif len(date_str) == 7:
+                    date_obj = datetime.strptime(date_str, '%Y-%m')
+                elif len(date_str) == 4:
+                    date_obj = datetime.strptime(date_str, '%Y')
+                else:
+                    continue
+                date_obj = kst.localize(date_obj)
+                converted_dates.append(date_obj)
+            except ValueError:
+                continue
+        past_dates = [date for date in converted_dates if date <= today]
+        if not past_dates:
+            return {"예외": "미래 날짜의 정보는 제공할 수 없습니다."}
+    else:
+        # 날짜가 없을 경우 최신 날짜로 설정
+        past_dates = [yesterday]
 
-    return "올바른 주식 종목이나 정보를 제공해주세요."
+    # 날짜 조건 생성
+    date_conditions = []
+    for date_obj in past_dates:
+        date_str = date_obj.strftime('%Y-%m-%d')
+        date_conditions.append(f"'{date_str}'")
+    date_condition = f"fd_date IN ({', '.join(date_conditions)})"
+
+    # SQL 쿼리 생성
+    queries = {}
+    for stock in requested_stocks:
+        for info in requested_infos:
+            stock_info_column = stock_map.get(stock, {}).get(info)
+            stock_price_column = stock_map.get(stock, {}).get('StockPrice')
+            if not stock_info_column or not stock_price_column:
+                continue  # 해당 정보가 없으면 건너뜀
+            query_key = f"{stock}_{info}"
+            query = f"SELECT fd_date, {stock_info_column}, {stock_price_column} FROM tb_stock WHERE {date_condition} ORDER BY fd_date DESC;"
+            queries[query_key] = query
+
+    if not queries:
+        return {"예외": "해당 정보가 없습니다."}
+
+    return queries
+
 def predict_stock_query():
     return "주식/코인에 대한 예상값은 다음 링크를 참조하세요: {PS_LINK}"
+
 def economic_indicator_query():
     return "경제지표에 대한 자세한 정보는 다음 링크를 참조하세요: {EI_LINK}"
 
 def stock_create_quary(text):
-    entity = extract_stock_entities(text)
-    if len(entity) >= 3:
-        return "하나의 질문만 해주세요."
+    entities = extract_stock_entities(text)
+    # if len(entities) >= 3:
+    #     return {"예외": "하나의 질문만 해주세요."}
 
-    if "주가" in entity:
-        stock_price = stockpricequery(text)
-        return stock_price
-    elif any(info in entity for info in ["PBR", "PER", "ROE", "MC"]):
-        stock_info = stock_information_query(text)
-        return stock_info
-    elif "예상" in entity:
-        predict_stock_query()
-    elif "경제지표" in entity:
-        economic = economic_indicator_query()
-        return economic
-    elif "증시" in entity:
-        return "텍스트 파일 경로"
+    if any(info in entities for info in ["PBR", "PER", "ROE", "MC"]):
+        stock_info_query = stock_information_query(text)
+        return stock_info_query
+    elif "주가" in entities:
+        stock_price_query = stockpricequery(text)
+        return stock_price_query
+    elif "예상" in entities:
+        return predict_stock_query()
+    elif "경제지표" in entities:
+        return economic_indicator_query()
+    elif "증시" in entities:
+        
+        return {"증시": f"{stock_market_news}"}
+    else:
+        return {"예외": "올바른 주식 관련 질문을 해주세요."}
 
 def make_query(predict, text):
     if predict == 'finance':
         return finance_clean_query(text)
     elif predict == 'stock':
         return stock_create_quary(text)
-    elif predict == "FAQ":
-        return { "FAQ" : "http://localhost:3000/faq" }
+    elif predict == 'FAQ':
+        return { 'FAQ' : 'https://localhost:3000/faq' }
 
 
 
@@ -1546,7 +1636,7 @@ def extract_finance_entities(text):
         "소득": r"수입|소득|월급|급여",
         "예산": r"예산",
         "대출": r"대출",
-        "저축": r"적금|예금|저축",
+        "저축": r"적금|예금|저축|저금|예적금",
         "입출금": r"입출금|입금|출금|이체|송금|인출|납부|입금내역",
         "자산" : r"보유|자산|재정|재무|자본|재산|잔고",
         "주식" : r"주식|삼성|삼전|애플|코인|비트코인|samsung|apple|coin|bitcoin",
@@ -1557,10 +1647,10 @@ def extract_finance_entities(text):
     patterns2 = {
         "stats" : r"비교|통계|보고|정리|분석|현황",  # 내역+합계
         "simple" : r"내역|상황|항목|목록|기록|출처|조회|정보|사항|이력|내용",  # 내역
-        "sum" : r"합계|총액|잔액|잔고|총합|누적|합산|총계|전체금액|최종금액",  # 합계
+        "sum" : r"합계|총액|총 금액|잔액|잔고|총합|누적|합산|총계|전체금액|최종금액",  # 합계
         "average" : r"평균",  # 평균
         "date" : r"언제",  # 날짜
-        "sort" : r"가장|큰|작은|제일|많이|적게|높은|낮은|순위|순서|자주|반복|빈번|주요|적은|많은",  # 정렬
+        "sort" : r"가장|큰|크게|작은|제일|많이|적게|높은|높게|낮은|낮게|순위|순서|자주|반복|빈번|주요|적은|많은",  # 정렬
     }
 
     # 패턴에 맞는 주요 키워드 추출 함수
@@ -1615,8 +1705,7 @@ def extract_finance_entities(text):
     doc = nlp(text)
     
     # 엔티티 결과 수집
-    entities = {f"pattern{i}": [(ent._.get("cleaned_text"), ent.label_.replace(f"_pattern{i}", "")) 
-                             for ent in doc.ents if f"_pattern{i}" in ent.label_] for i in (1, 2)}
+    entities = {f"pattern{i}": [(ent._.get("cleaned_text"), ent.label_.replace(f"_pattern{i}", "")) for ent in doc.ents if f"_pattern{i}" in ent.label_] for i in (1, 2)}
     if not entities['pattern2']:
         entities['pattern2'].append(('기본값', 'simple'))
 
@@ -1761,84 +1850,284 @@ def predict_label(text, model, tokenizer):
     label_map = {0: 'stock', 1: 'finance', 2: 'FAQ'}
     return label_map[pred]
 
-
+def format_number_korean(num):
+    units = [("조", 1e12), ("억", 1e8), ("만", 1e4), ("", 1)]
+    for unit_name, unit_value in units:
+        if num >= unit_value:
+            value = num / unit_value
+            if unit_name:
+                return f"{value:.2f}{unit_name}"
+            else:
+                return f"{int(value)}"
+    return str(num)
 
 
 # ================================================================================ Sentence Creation Function ================================================================================
-# 지출_simple
-def expense_simple(data):
-    final_sentence = "지출내역:\n"
-    # max_length = max(len(part['rp_detail']) for part in data)  # 각 항목의 최대 길이를 계산하여 균등하게 정렬
-    for part in data:
-        date_data = part['rp_date']
-        detail_data = part['rp_detail']#.ljust(max_length)
-        amount_data = f"{part['rp_amount']:,}"
-        sentence = f'{date_data} :  {detail_data}\t| {amount_data}원\n'
-        final_sentence += sentence
-    return final_sentence
 
-def fixed_expense(data):
-    sentence = "고정 지출 내역:\n"
-    # max_length = max(get_display_width(part['rp_detail']) for part in data)
-    for part in data:
-        date_data = part['rp_date']
-        detail_data = part['rp_detail']#.ljust(max_length)
-        amount_data = f"{part['rp_amount']:,}"
-        sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
-    return sentence
+def month_plus(data, text_message):
+        
+    this_month = int(datetime.strftime(datetime.today(), '%m'))
+    next_month =  this_month + 1
+    next_month = 1 if next_month == 13 else next_month
+    step = 0
 
-def expense_sum(data):
-    data[0]['Total_amount'] = int(data[0]['Total_amount'])
-    sentence = f"지출 총 금액:  {data[0]['Total_amount']:,} 원"
-    return sentence
+    if any(phrase in text_message for phrase in ["다음달", "다음 달", f"{next_month}월"]):
+        step = 2
+    elif any(phrase in text_message for phrase in ["이번달", "이번 달", f"{this_month}월"]):
+        step = 1
 
-def expense_avg(data):
-    data[0]['Average_amount'] = float(data[0]['Average_amount'])
-    sentence = f"지출 평균 금액:  {data[0]['Average_amount']:,} 원"
-    return sentence
+    if step > 0:
+        for i in range(len(data)):
+            data[i]['rp_date'] = datetime.strptime(data[i]['rp_date'], '%Y-%m-%d')
+            data[i]['rp_date'] = data[i]['rp_date'] + relativedelta(months=step)
+            data[i]['rp_date'] = data[i]['rp_date'].strftime('%Y-%m-%d')           
+    
+    return data
 
-def expense_highest(data):
-    date_data = data['rp_date']
-    detail_data = data['rp_detail']
-    amount_data = f"{data['rp_amount']:,}"
-    sentence = f"가장 높았던 지출: {date_data} :  {detail_data}\t| {amount_data} 원"
-    return sentence
-
-def expense_top5(data):
-    sentence = "지출 금액 높은 순위 TOP5:\n"
-    for part in data:
-        date_data = part['rp_date']
-        detail_data = part['rp_detail']
-        amount_data = f"{part['rp_amount']:,}"
-        sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
-    return sentence
-
-def expense_lowest(data):
-    date_data = data['rp_date']
-    detail_data = data['rp_detail']
-    amount_data = f"{data['rp_amount']:,}"
-    sentence = f"가장 낮았던 지출: {date_data} :  {detail_data}\t| {amount_data} 원"
-    return sentence
-
-def expense_bottom5(data):
-    sentence = "지출 금액 낮은 순위 TOP5:\n"
-    for part in data:
-        date_data = part['rp_date']
-        detail_data = part['rp_detail']
-        amount_data = f"{part['rp_amount']:,}"
-        sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
-    return sentence
-
-def expense_frequent(data):
-    sentence = "자주 사용된 지출 내역:\n"
-    for part in data:
-        date_data = part['rp_date']
-        detail_data = part['rp_detail']
-        amount_data = f"{part['rp_amount']:,}"
-        sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
-    return sentence
+def format_date(date_str):
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            date_obj = datetime.strptime(date_str, fmt)
+            return date_obj.strftime("%Y년 %m월 %d일")
+        except ValueError:
+            continue
+    return None
 
 
+# 지출/소득/입출금/예적금
+def make_answer(data, front_key, backword_key, text_message):
+
+    if "고정" in text_message or "고 정" in text_message:
+        data = month_plus(data, text_message)  
+
+    if backword_key == 'simple':
+        final_sentence = f"{front_key}내역:\n"
+        for part in data:
+            date_data = part['rp_date']
+            detail_data = part['rp_detail']
+            amount_data = f"{part['rp_amount']:,}"
+            sentence = f'{date_data} :  {detail_data}\t| {amount_data}원\n'
+            final_sentence += sentence
+        return final_sentence
+    
+    elif backword_key == 'sum':
+        data[0]['Total_amount'] = int(data[0]['Total_amount'])
+        sentence = f"{front_key} 총 금액은 {data[0]['Total_amount']:,}원 입니다."
+        return sentence
+    
+    elif backword_key == 'avg':
+        data[0]['Average_amount'] = int(float(data[0]['Average_amount']))
+        sentence = f"{front_key} 평균 금액은 {data[0]['Average_amount']:,}원 입니다."
+        return sentence
+    
+    elif backword_key == 'highest':
+        date_data = data[0]['rp_date']
+        detail_data = data[0]['rp_detail']
+        amount_data = f"{data[0]['rp_amount']:,}"
+        sentence = f"가장 높았던 {front_key}은 {date_data}에 {detail_data}으로 {amount_data}원 입니다."
+        return sentence
+    
+    elif backword_key == 'top5':
+        sentence = f"{front_key} 금액 높은 순위 TOP5:\n"
+        for part in data:
+            date_data = part['rp_date']
+            detail_data = part['rp_detail']
+            amount_data = f"{part['rp_amount']:,}"
+            sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
+        if len(data) < 5:
+            sentence = sentence + "\n 추가 해당하는 내역이 없습니다."
+        return sentence
+    
+    elif backword_key == 'lowest':
+        date_data = data[0]['rp_date']
+        detail_data = data[0]['rp_detail']
+        amount_data = f"{data[0]['rp_amount']:,}"
+        sentence = f"가장 낮았던 {front_key}은 {date_data}에 {detail_data}으로 {amount_data}원 입니다."
+        return sentence
+    
+    elif backword_key == 'bottom5':
+        sentence = f"{front_key} 금액 낮은 순위 TOP5:\n"
+        for part in data:
+            date_data = part['rp_date']
+            detail_data = part['rp_detail']
+            amount_data = f"{part['rp_amount']:,}"
+            sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
+        if len(data) < 5:
+            sentence = sentence + "\n 추가 해당하는 내역이 없습니다."
+        return sentence
+    
+    elif backword_key == 'frequent':
+        sentence = f"자주 있는 {front_key} 내역:\n"
+        for part in data:
+            date_data = part['rp_date']
+            detail_data = part['rp_detail']
+            amount_data = f"{part['rp_amount']:,}"
+            sentence += f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
+        return sentence
+    
+    elif backword_key == 'stats':
+        amount = int(data[0]['Total_Amount'])
+        final_sentence = f"{front_key} 내역:\n"
+        for part in data:
+            date_data = part['rp_date']
+            detail_data = part['rp_detail']
+            amount_data = f"{part['rp_amount']:,}"
+            sentence = f'{date_data} :  {detail_data}\t| {amount_data} 원\n'
+            final_sentence += sentence
+        final_sentence = f'{final_sentence}\n{front_key}한 총 금액은 {amount:,}원 입니다.'
+        return final_sentence
+    
+
+# 예산
+def budget_answer(query, front_key):
+    if front_key == "예산":
+        budget = query[0]["uf_target_budget"]
+        paied_amount = query[0]["rp_amount"]
+        month = datetime.now().strftime("%Y년 %m월")
+        result = f"{month} 예산은 {budget:,}원 입니다.\n 사용 금액을 제외한 남은 예산금액은 {(budget-paied_amount):,}원 입니다."
+        return result
+    
+    elif front_key == "올해 예산":
+        return query
+
+    elif front_key == "다음달 예산추천":
+        result = f"다음달 예산으로 {int(float(query[0]['monthly_average'])):,}원을 추천 드립니다.\n 예산 추천은 최근 3개월 소비를 분석하여 답변해드립니다."
+        return result
+    
+    elif front_key == "올해 예산추천":
+        result = f"올해 예산으로 {int(float(query[0]['yearly_average'])):,}원을 추천 드립니다.\n 예산 추천은 최근 3개년 소비를 분석하여 답변해드립니다."
+        return result
+
+    elif front_key == "과거 예산 조회":
+        return query
+
+# 대출
+def loan_answer(query, front_key):
+    
+    if (front_key =="대출상환") or (front_key =="대출 상환"):
+        loan = query[0]["uf_loan"]   
+        final_sentence = f"{front_key}내역:\n"
+        for part in query:
+            date_data = part['rp_date']
+            detail_data = part['rp_detail']
+            amount_data = f"{part.get('rp_amount', 0):,}"
+            sentence = f'{date_data} :  {detail_data}\t| {amount_data}원\n'
+            final_sentence += sentence
+            paid_loan = int(part['rp_all'])
+
+        loan_balance = loan - paid_loan
+        final_sentence = f'{final_sentence}\n 남은 대출금액: {loan_balance:,}원'
+        return final_sentence
+        
+    elif front_key == "대출":
+        loan = query[0].get('uf_loan', 0) if query else 0  # 리스트의 첫 번째 항목에서 대출 금액 가져옴   
+        result = f"대출 총액은 {loan:,}원입니다."
+        return result
+
+
+def generate_stock_price_response(query_result, stock_name):
+    if not query_result:
+        return f"{stock_name}의 주가 정보를 찾을 수 없습니다."
+
+    # 종목별 통화 단위 매핑
+    currency_map = {
+        '삼성전자': '원',
+        '애플': '달러',
+        '비트코인': '달러'
+    }
+
+    currency = currency_map.get(stock_name, '원')  # 기본값은 '원'으로 설정
+
+    response = f"{stock_name}의 주가는:\n"
+    if isinstance(query_result, list):
+        for record in query_result:
+            date = record.get('fd_date', '').split('T')[0]
+            price = record.get('sc_ss_stock') or record.get('sc_ap_stock') or record.get('sc_coin')
+            if price is not None:
+                response += f"{date[:4]}년{date[5:7]}월{date[8:10]}일의 전일 종가 기준 {price}{currency} 입니다."
+    elif isinstance(query_result, dict):
+        record = query_result
+        date = record.get('fd_date', '').split('T')[0]
+        price = record.get('sc_ss_stock') or record.get('sc_ap_stock') or record.get('sc_coin')
+        if price is not None:
+            response += f"{date[:4]}년{date[5:7]}월{date[8:10]}일 전일 종가 기준 {price}{currency} 입니다."
+    else:
+        response += "데이터를 처리할 수 없습니다."
+
+    return response
+
+
+def generate_stock_info_response(query_result, keyword):
+    if not query_result:
+        return "해당 정보를 찾을 수 없습니다."
+
+    response = ""
+    # 종목명을 추출
+    stock_name = keyword.split('_')[0]  # 예: '삼성전자_PER'에서 '삼성전자' 추출
+
+    # 통화 단위 매핑
+    currency_map = {
+        '삼성전자': '원',
+        '애플': '달러',
+        '비트코인': '달러'  # 비트코인의 경우 필요에 따라 수정
+    }
+    currency = currency_map.get(stock_name, '원')  # 기본값은 '원'
+
+    if isinstance(query_result, list):
+        records = query_result
+    elif isinstance(query_result, dict):
+        records = [query_result]
+    else:
+        response += "데이터를 처리할 수 없습니다."
+        return response.strip()
+
+    for record in records:
+        date = record.get('fd_date', '').split('T')[0]
+        metric_value = None
+        metric_name = ""
+        stock_price = None
+
+        if 'PER' in keyword:
+            metric_value = record.get('sc_ss_per') or record.get('sc_ap_per')
+            metric_name = f"{stock_name} PER"
+        elif 'PBR' in keyword:
+            metric_value = record.get('sc_ss_pbr') or record.get('sc_ap_pbr')
+            metric_name = f"{stock_name} PBR"
+        elif 'ROE' in keyword:
+            metric_value = record.get('sc_ss_roe') or record.get('sc_ap_roe')
+            metric_name = f"{stock_name} ROE"
+        elif 'MC' in keyword:
+            metric_value = record.get('sc_ss_mc') or record.get('sc_ap_mc')
+            metric_name = f"{stock_name} 시가총액"
+            # 시가총액 포맷팅
+            if metric_value is not None:
+                metric_value = float(metric_value)
+                if stock_name == '삼성전자':
+                    metric_value_formatted = format_number_korean(metric_value) + f" {currency}"
+                elif stock_name == '애플':
+                    if metric_value >= 1e12:
+                        metric_value_formatted = f"{metric_value / 1e12:.2f}조 {currency}"
+                    else:
+                        metric_value_formatted = f"{metric_value / 1e8:.2f}억 {currency}"
+                else:
+                    metric_value_formatted = f"{metric_value:,} {currency}"
+                metric_value = metric_value_formatted
+
+        # 주가 정보 가져오기
+        stock_price = record.get('sc_ss_stock') or record.get('sc_ap_stock') or record.get('sc_coin')
+        if stock_price is not None:
+            stock_price = float(stock_price)
+            stock_price = f"{stock_price:,}{currency}"
+
+        # 응답 문자열 구성
+        if metric_value is not None and stock_price is not None:
+            response += f"{date[:4]}년 {date[5:7]}월 {date[8:10]}일의 {metric_name}: {metric_value}"
+        elif metric_value is not None:
+            response += f"{date[:4]}년 {date[5:7]}월 {date[8:10]}일의 {metric_name}: {metric_value}"
+        elif stock_price is not None:
+            response += f"{date[:4]}년 {date[5:7]}월 {date[8:10]}일의 {stock_name}"
+
+    return response.strip() if response else "해당 정보를 찾을 수 없습니다."
 
 
 # ================================================================================ Chatbot req, res Data ================================================================================
@@ -1861,6 +2150,7 @@ if __name__ == "__main__":
             user_id = data.get('user_id')
             query_result = data.get('queryResult')  # queryResult가 맞는지 확인
             keyword = data.get('key')
+        
 
             # 첫 번째 입력 처리: message와 user_id가 있는 경우
             if message and user_id and not query_result and not keyword:
@@ -1870,6 +2160,8 @@ if __name__ == "__main__":
 
                 for key in query:
                     query[key] = query[key].format(user_id=user_id)
+
+                text_message = message[:]
 
                 message = ''
                 user_id = ''
@@ -1882,44 +2174,52 @@ if __name__ == "__main__":
                         query_time = datetime.strptime(entry['rp_date'], "%Y-%m-%dT%H:%M:%S.%fZ")
                         korea_time = query_time.replace(tzinfo=pytz.utc).astimezone(kst)
                         entry['rp_date'] = korea_time.strftime("%Y-%m-%d")
+                    elif 'fd_date' in entry:
+                        query_time = datetime.strptime(entry['fd_date'], "%Y-%m-%dT%H:%M:%S.%fZ")
+                        korea_time = query_time.replace(tzinfo=pytz.utc).astimezone(kst)
+                        entry['fd_date'] = korea_time.strftime("%Y-%m-%d")
 
                 # 전달받은 queryResult 데이터로 처리
                 try:
-                    if keyword == '예외':
-                        print(f'"{query_result}" 오류가 발생하였습니다.\n올바른 형식으로 다시 질문해 주세요.', flush=True)
-                    elif keyword == '지출_simple':
-                        sentence = expense_simple(query_result)
+                    if "_" in keyword:
+                        front_key = keyword.split("_")[0]
+                        backword_key = keyword.split("_")[1]
+                    else:
+                        front_key = keyword
+
+                    if (keyword == '예외') and ('https' in query_result) :
+                        print(f'{query_result}', flush=True)
+                    elif (keyword == '예외') and ('https' not in query_result) :
+                        print(f'"{query_result}"\n올바른 형식으로 다시 질문해 주세요.', flush=True)
+                    elif any(i in keyword for i in ['지출', '소득', '입금', '출금', '저축', '저금', '예적금', '예금', '적금']):
+                        sentence = make_answer(query_result, front_key, backword_key, text_message)
                         print(sentence, flush=True)
-                    elif keyword == '고정지출_simple':
-                        sentence = fixed_expense(query_result)
+                    elif '예산' in keyword: #in ['예산', '올해 예산', '올해 예산추천', '이번달 예산추천', "과거 예산 조회"]:
+                        sentence = budget_answer(query_result, front_key)
                         print(sentence, flush=True)
-                    elif keyword == '지출_sum':
-                        sentence = expense_sum(query_result)
+                    elif '대출' in keyword:
+                        sentence = loan_answer(query_result, front_key)
                         print(sentence, flush=True)
-                    elif keyword == '지출_average':
-                        sentence = expense_avg(query_result)
+                    elif '링크' in keyword or 'FAQ' in keyword:
+                        print(query_result, flush=True)
+                    elif '주가' in keyword:
+                        stock_name = keyword.replace('_주가', '')
+                        sentence = generate_stock_price_response(query_result, stock_name)
                         print(sentence, flush=True)
-                    elif keyword == '지출_highest':
-                        sentence = expense_highest(query_result)
-                        print(sentence, flush=True)
-                    elif keyword == '지출_top5':
-                        sentence = expense_top5(query_result)
-                        print(sentence, flush=True)
-                    elif keyword == '지출_lowest':
-                        sentence = expense_lowest(query_result)
-                        print(sentence, flush=True)
-                    elif keyword == '지출_bottom5':
-                        sentence = expense_bottom5(query_result)
-                        print(sentence, flush=True)
-                    elif keyword == '지출_frequent':
-                        sentence = expense_frequent(query_result)
-                        print(sentence, flush=True)
+                    elif any(metric in keyword for metric in ["PER", "PBR", "ROE", "MC"]):
+                        response = generate_stock_info_response(query_result, keyword)
+                        print(response, flush=True)
                     else:
                         print(json.dumps(query_result), flush=True)
                     query_result = ''
                     keyword = ''
+                    text_message = ''
                 except json.JSONDecodeError as e:
                     print(f"JSONDecodeError: {e}", flush=True)
+
+            # key 또느 query_result의 값이 1개만 있을 때,
+            elif (keyword and not query_result) or (not keyword and query_result):
+                print("해당하는 결과를 찾을 수 없습니다. 다시 질문해 주세요.", flush=True)
 
         except json.JSONDecodeError:
             print("Error: 입력 데이터를 JSON으로 파싱하는 중 오류가 발생했습니다.", flush=True)

@@ -4,7 +4,10 @@ const Redis = require('ioredis');
 const RedisStore = require('connect-redis').default;
 const cors = require('cors');
 const dotenv = require('dotenv');
-const http = require('http');
+
+const fs = require('fs');
+const https = require('https');
+
 const { Server } = require('socket.io');
 const cookieParser = require('cookie-parser');
 const rateLimit = require('express-rate-limit');  // Rate Limiting 미들웨어 api호출 제한
@@ -22,14 +25,20 @@ const newscheck = require('./src/routes/newsCheckRoutes');
 const stockPredictRoutes = require('./src/routes/stockPredictRoutes');
 const componentsRoutes = require('./src/routes/componentsRoutes');
 
-// python process for chatbot
+// python process
 const { startPythonProcess } = require('./src/controllers/chatbotController');
 startPythonProcess();
 
 dotenv.config();
 
+// SSL 인증서 읽기 
+const options = {
+  key : fs.readFileSync('./cert/server.key'), // 인증서 키 경로 
+  cert : fs.readFileSync('./cert/server.cert') // 인증서 경로
+}
+
 const app = express();
-const server = http.createServer(app);
+const server = https.createServer(options, app); // https 서버 생성
 
 const redisClient = new Redis({
   host: process.env.REDIS_HOST,
@@ -47,33 +56,34 @@ redisClient.on('error', (err) => {
   console.error('Redis 클라이언트 연결 오류:', err);
 });
 
+// CORS 설정
 app.use(cors({
-  origin: process.env.CLIENT_URL, // 클라이언트 주소
+  origin: process.env.CLIENT_URL,
   credentials: true,
 }));
 
-app.use(express.json());
+app.use(express.json()); // POST 요청처리 위해 필요 
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
+// 세션 관리
 app.use(session({
   store: new RedisStore({ client: redisClient }),
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
-    maxAge: parseInt(process.env.SESSION_TIMEOUT, 10) || 3600000,
-    httpOnly: true,
-    secure: false,
-    sameSite: 'Lax',
+    maxAge: parseInt(process.env.SESSION_TIMEOUT, 10) || 3600000, // 세션 유효 시간 1시간
+    httpOnly: true, // 클라이언트에서 쿠키를 확인하지 못하도록 설정
+    secure: true,  // https에서만 쿠키 전송
+    sameSite: 'Lax', // 크로스 사이트 요청 방지
   },
 }));
-
 
 // api 호출 제한 미들웨어
 const apiLimiter = rateLimit({
   windowMs: 10 * 60 * 1000, // 10분 간격
-  max: 1000, // 10분 동안 최대 200번의 요청 허용
+  max: 1000, // 10분 동안 최대 1000번의 요청 허용
   message: "너무 많은 요청을 보내셨습니다. 10분 후 다시 시도해주세요.",
   headers: true, // 응답 헤더에 제한 관련 정보 포함
 });
@@ -119,7 +129,7 @@ app.use('/api/components', componentsRoutes);
 
 const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL, // 클라이언트 주소
+    origin: process.env.CLIENT_URL,
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -129,8 +139,7 @@ const io = new Server(server, {
 const MAX_CONCURRENT_USERS = 20;
 
 // 접속자 관리 변수
-let anonymousCounter = 0; // 익명 번호 관리
-let onlineUsers = new Set(); // 현재 접속자 세션 관리
+let onlineUsers = new Map(); // userId와 익명 번호를 연결해서 관리
 
 subClient.subscribe('newsTalk', (err) => {
   if (err) {
@@ -165,30 +174,11 @@ io.on('connection', (socket) => {
 
   const sessionId = socket.handshake.sessionID;
 
-  // 접속 시 랜덤 익명 번호 부여
-  if (!onlineUsers.has(sessionId)) {
-    const assignedNumber = ++anonymousCounter; // 카운터 증가
-    onlineUsers.add(sessionId);
-    console.log(`User ${sessionId} assigned anonymous number: ${assignedNumber}`);
-    
-    // 현재 접속자 수 출력
-    console.log(`Current online users count: ${onlineUsers.size}`);
+  // 현재 접속자 수에 따라 익명 번호 부여
+  onlineUsers.set(sessionId, onlineUsers.size + 1);
+  console.log(`User ${sessionId} assigned anonymous number: ${onlineUsers.get(sessionId)}`);
 
-    socket.emit('assignNumber', assignedNumber); // 클라이언트에 번호 전달
-  } else {
-    // 기존 사용자일 경우 현재 익명 번호 재전송
-    socket.emit('assignNumber', Array.from(onlineUsers).indexOf(sessionId) + 1);
-  }
-
-  // 익명 번호 재부여 이벤트
-  socket.on('reassignNumbers', () => {
-    const currentUsers = Array.from(onlineUsers); // 현재 접속자 목록
-    currentUsers.forEach((userSessionId, index) => {
-      const newAnonymousNumber = index + 1; // 1부터 시작하는 번호
-      console.log(`User ${userSessionId} assigned new anonymous number: ${newAnonymousNumber}`);
-      io.to(userSessionId).emit('assignNumber', newAnonymousNumber); // 클라이언트에 새로운 익명 번호 전송
-    });
-  });
+  socket.emit('assignNumber', onlineUsers.get(sessionId)); // 클라이언트에 익명 번호 전달
 
   socket.on('sendMessage', (data) => {
     const timestamp = Date.now();
@@ -210,21 +200,73 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     onlineUsers.delete(sessionId);
     console.log(`User ${sessionId} disconnected. Current online users: ${onlineUsers.size}`);
+    // 모든 익명 번호를 재정렬하여 접속자 수에 맞게 유지
+    let counter = 1;
+    onlineUsers.forEach((_, key) => {
+      onlineUsers.set(key, counter++);
+    });
   });
 });
 
 // 사용자 정보 제공 API
 app.get('/api/user', (req, res) => {
+  console.log('세션 확인:', req.session); 
+
   if (req.session && req.session.userId) {
     // 세션에서 사용자 정보 제공
     res.json({
       userId: req.session.userId,
       email: req.session.email,
       username: req.session.username,
+      sessionId: req.sessionID 
     });
   } else {
+    console.error('세션이 존재하지 않거나 userId가 없습니다.');
     res.status(401).json({ error: 'User not logged in' });
   }
+});
+
+app.get('/api/admin/session-status', (req, res) => {
+  if (!req.sessionStore || typeof req.sessionStore.all !== 'function') {
+    return res.status(500).json({ error: 'Session store is not available or session retrieval function not found' });
+  }
+
+  req.sessionStore.all((err, sessions) => {
+    if (err) {
+      if (!res.headersSent) {
+        return res.status(500).json({ error: 'Failed to retrieve sessions' });
+      }
+    }
+
+    const sessionStatuses = Object.keys(sessions).map(sessionId => ({
+      sessionId: sessionId, 
+      userId: sessions[sessionId].userId, 
+      isConnected: true 
+    }));
+
+    console.log('Active session statuses:', sessionStatuses);
+    res.json({ sessionStatuses });
+  });
+});
+
+// 로그인 성공 시 userId를 세션에 저장
+app.post('/api/auth/login', (req, res) => {
+  const { userId, email, username } = req.body;
+
+  req.session.userId = userId;
+  req.session.email = email;
+  req.session.username = username;
+
+  res.status(200).json({ message: '로그인 성공', userId, email, username });
+});
+
+// Household 데이터 처리 API
+app.get('/api/household/HouseHold', (req, res) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Unauthorized: No user session found' });
+  }
+  // 정상적인 세션일 경우 데이터 반환
+  res.json({ message: 'Household data fetched successfully' });
 });
 
 // 서버 오류 핸들링
